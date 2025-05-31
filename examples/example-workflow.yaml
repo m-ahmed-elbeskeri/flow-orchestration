@@ -1,0 +1,79 @@
+# example-workflow.yaml
+---
+name: email_processor
+version: 1.0.0
+description: "Process urgent emails and send notifications"
+author: "Team Workflow <team@example.com>"
+
+config:
+  timeout: 600
+  max_concurrent: 3
+  retry_policy:
+    max_retries: 3
+    initial_delay: 2.0
+    exponential_base: 2.0
+
+environment:
+  variables:
+    LOG_LEVEL: INFO
+    EMAIL_CHECK_QUERY: "is:unread label:urgent"
+  secrets:
+    - GMAIL_CREDENTIALS
+    - SLACK_TOKEN
+
+states:
+  - name: start
+    type: builtin.start
+    transitions:
+      - on_success: fetch_emails
+      
+  - name: fetch_emails
+    type: gmail.read_emails
+    config:
+      query: "is:unread label:urgent"
+      max_results: 10
+      mark_as_read: false
+    resources:
+      network_weight: 2.0
+    dependencies:
+      - name: start
+        type: required
+    transitions:
+      - on_success: check_emails
+      - on_failure: error_handler
+      
+  - name: check_emails
+    type: builtin.conditional
+    config:
+      condition: len(context.get_state("fetched_emails", [])) > 0
+    dependencies:
+      - name: fetch_emails
+    transitions:
+      - on_true: send_notification
+      - on_false: end
+      
+  - name: send_notification
+    type: slack.send_message
+    config:
+      channel: "#alerts"
+      message: "Found {{ fetched_emails|length }} urgent emails"
+    dependencies:
+      - name: check_emails
+    transitions:
+      - on_success: end
+      - on_failure: error_handler
+      
+  - name: error_handler
+    type: builtin.error_handler
+    config:
+      log_level: ERROR
+      notify: true
+    transitions:
+      - on_complete: end
+      
+  - name: end
+    type: builtin.end
+
+schedule:
+  cron: "*/5 * * * *"  # Every 5 minutes
+  timezone: "UTC"

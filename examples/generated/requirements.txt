@@ -1,0 +1,7 @@
+asyncio
+structlog
+pydantic>=2.0.0
+pyyaml
+black
+pytest
+pytest-asyncio

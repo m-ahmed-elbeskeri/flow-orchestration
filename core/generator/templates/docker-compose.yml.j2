@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  {{ spec.snake_case_name }}:
+    build: .
+    environment:
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs

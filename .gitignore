@@ -1,0 +1,169 @@
+######################
+# PYTHON IGNORE RULES
+######################
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cython build artifacts
+*.c
+*.cpp
+*.so
+*.pyd
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+.ENV/
+.env.local
+.env.*.local
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Pylint
+pylint-report.txt
+pylint-output.log
+
+# Pipenv / Poetry
+Pipfile.lock
+poetry.lock
+
+# pyenv
+.python-version
+
+#########################
+# NODE / WEBDEV IGNORE
+#########################
+
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Output / cache
+dist/
+build/
+.cache/
+.next/
+out/
+.nuxt/
+.svelte-kit/
+.storybook/
+coverage/
+
+# Vite / Webpack / Parcel
+.vite/
+*.pack
+*.parcel-cache/
+parcel-cache/
+*.map
+
+# Testing
+jest.config.js
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+
+# ESLint / Prettier
+.eslintcache
+.prettierignore
+.prettiercache
+
+# Style lint
+.stylelintcache
+
+######################
+# EDITORS & SYSTEM
+######################
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# swap files
+*.swp
+*.swo
+*~
+
+######################
+# SENSITIVE FILES
+######################
+
+# Secrets & credentials
+*.key
+*.pem
+secrets.yaml
+credentials.json
+.env
+.env.*

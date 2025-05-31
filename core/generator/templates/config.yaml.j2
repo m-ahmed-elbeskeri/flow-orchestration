@@ -1,0 +1,14 @@
+# {{ spec.name }} Configuration
+name: "{{ spec.name }}"
+version: "{{ spec.version }}"
+author: "{{ spec.author }}"
+
+workflow:
+  timeout: {{ spec.config.timeout }}
+  max_concurrent: {{ spec.config.max_concurrent }}
+  
+environment:
+  variables:
+{% for key, value in spec.environment.variables.items() -%}
+    {{ key }}: "{{ value }}"
+{% endfor %}
