@@ -1,36 +1,40 @@
-// src/types/workflow.ts
 export interface Workflow {
   id: string
   name: string
   description: string
   version: string
-  status: 'draft' | 'active' | 'paused'
+  author: string
+  status: 'created' | 'running' | 'completed' | 'failed' | 'paused'
   created_at: string
   updated_at: string
+  yaml_content: string
 }
 
-export interface FlowNode {
-  id: string
-  type: string
-  position: { x: number; y: number }
-  data: {
-    label: string
-    type: string
-    config?: Record<string, any>
-  }
+export interface WorkflowCreateRequest {
+  name: string
+  yaml_content: string
+  auto_start?: boolean
 }
 
-export interface FlowEdge {
-  id: string
-  source: string
-  target: string
-  type?: string
-  animated?: boolean
+export interface WorkflowCreateResponse {
+  workflow_id: string
+  name: string
+  status: string
+  message?: string
+}
+
+export interface WorkflowListItem {
+  workflow_id: string
+  name: string
+  description: string
+  status: string
+  created_at: string
+  states_count?: number
 }
 
 export interface WorkflowExecution {
   workflow_id: string
-  execution_id: string
+  execution_id?: string
   status: 'running' | 'completed' | 'failed' | 'paused'
   started_at: string
   completed_at?: string
