@@ -12,6 +12,8 @@ import structlog
 import httpx
 import smtplib
 from email.message import EmailMessage
+from collections import defaultdict
+
 
 from core.monitoring.metrics import MetricAggregation
 from core.storage.events import WorkflowEvent, EventType

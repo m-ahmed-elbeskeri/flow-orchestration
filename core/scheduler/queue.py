@@ -1,7 +1,7 @@
 """Queue management for scheduled tasks."""
 
 import asyncio
-from typing import Dict, List, Optional, Any, Generic, TypeVar, Protocol
+from typing import Dict, List, Optional, Any, Generic, TypeVar, Protocol, Union, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
