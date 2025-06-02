@@ -1,0 +1,23 @@
+name: gmail
+version: 1.0.0
+description: Gmail integration for sending and reading emails
+author: Workflow Orchestrator Team
+
+states:
+  send_email:
+    description: "send_email state"
+  read_emails:
+    description: "read_emails state"
+  search_emails:
+    description: "search_emails state"
+
+resources:
+  cpu_units: 0.1
+  memory_mb: 100
+  network_weight: 1.0
+
+dependencies:
+  - google-auth
+  - google-auth-oauthlib
+  - google-auth-httplib2
+  - google-api-python-client

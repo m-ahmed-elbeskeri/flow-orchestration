@@ -1,0 +1,14 @@
+# email_processor Configuration
+name: "email_processor"
+version: "1.0.0"
+author: "Team Workflow <team@example.com>"
+
+workflow:
+  timeout: 600.0
+  max_concurrent: 3
+  
+environment:
+  variables:
+LOG_LEVEL: "INFO"
+EMAIL_CHECK_QUERY: "is:unread label:urgent"
+
