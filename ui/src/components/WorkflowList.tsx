@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom' // Add this import
 import { 
   Plus, Play, Trash2, Clock, CheckCircle, XCircle, Code, Edit,
   Search, BarChart3, Activity, TrendingUp, Zap, Settings, Monitor, AlertCircle,
   Pause, Square, RotateCcw, Eye, Filter, Grid, List, FileText, Download,
   ArrowUp, ArrowDown, Minus, Calendar, Users, Target, X
 } from 'lucide-react'
-// Navigation handled via onClick handlers
 import WorkflowYamlCreator from './WorkflowYamlCreator'
 
 // API client for actual backend calls
@@ -376,6 +376,7 @@ function ScheduleModal({ workflow, isOpen, onClose, onSchedule }) {
     </div>
   )
 }
+
 function ExecutionMonitor({ workflowId, executionId, onClose }) {
   const [wsConnection, setWsConnection] = useState(null)
   
@@ -728,6 +729,7 @@ function ExecutionMonitor({ workflowId, executionId, onClose }) {
 }
 
 export default function WorkflowList() {
+  const navigate = useNavigate() // Add this hook
   const [showCreator, setShowCreator] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -1187,7 +1189,7 @@ export default function WorkflowList() {
               </button>
               
               <button
-                onClick={() => console.log('Navigate to workflow creator')}
+                onClick={() => navigate('/workflows/create')} // Fixed navigation
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center transition-colors"
                 title="New Workflow"
               >
@@ -1351,7 +1353,7 @@ export default function WorkflowList() {
               </button>
               
               <button
-                onClick={() => console.log('Navigate to full creator')}
+                onClick={() => navigate('/workflows/create')} // Fixed navigation
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg inline-flex items-center transition-colors"
               >
                 <Plus className="w-4 h-4 mr-2" />
@@ -1500,7 +1502,7 @@ export default function WorkflowList() {
                         </button>
                         
                         <button
-                          onClick={() => console.log('Navigate to edit:', workflow.workflow_id)}
+                          onClick={() => navigate(`/workflows/${workflow.workflow_id}/edit`)} // Fixed navigation
                           className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
                           title="Edit Workflow"
                         >
@@ -1647,7 +1649,7 @@ export default function WorkflowList() {
                         </button>
                         
                         <button
-                          onClick={() => console.log('Navigate to edit:', workflow.workflow_id)}
+                          onClick={() => navigate(`/workflows/${workflow.workflow_id}/edit`)} // Fixed navigation
                           className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
                           title="Edit"
                         >
