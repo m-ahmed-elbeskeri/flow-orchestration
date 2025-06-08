@@ -1,66 +1,38 @@
-# core/api/rest/app.py
-import asyncio
-import json
-import logging
 import uuid
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-import tempfile
-import zipfile
+import json
+import random
+import asyncio
 import base64
-
-from fastapi import (
-    FastAPI, HTTPException, Depends, BackgroundTasks, Request, 
-    WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import SQLAlchemyError
-import structlog
+import tempfile
 import yaml
+import structlog
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
+from fastapi.security import HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from core.config import get_settings, Features
 from core.storage.backends.sqlite import SQLiteBackend
-from core.execution.engine import WorkflowEngine
-from core.agent.base import Agent, RetryPolicy
-from core.agent.context import Context
-from core.monitoring.metrics import MetricsCollector, RealTimeMetrics
-from core.monitoring.events import get_event_stream, EventStream, EventFilter
-from core.monitoring.alerts import AlertManager, AlertRule, AlertSeverity
-from core.resources.requirements import ResourceRequirements
+from core.monitoring.metrics import MetricsCollector
+from core.monitoring.alerts import AlertSeverity
 from core.generator.engine import CodeGenerator
-from core.generator.parser import WorkflowParser, ValidationError
-from core.scheduler.cron import CronScheduler
-from plugins.registry import plugin_registry
-from enterprise.ai.plugin_discovery import PluginDiscovery
+from core.generator.parser import WorkflowParser
 
-# Configure logging
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 features = Features(settings)
-
-# Security
 security = HTTPBearer()
 
-# Global state
 app_state = {
-    "engine": None,
-    "agents": {},
     "workflows": {},
     "executions": {},
-    "websocket_connections": {},
     "metrics_collector": None,
-    "alert_manager": None,
-    "event_stream": None,
-    "scheduler": None
+    "storage": None
 }
 
-# Pydantic Models
 class WorkflowCreate(BaseModel):
     name: str
     description: str = ""
@@ -72,7 +44,6 @@ class WorkflowUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     yaml_content: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
 
 class WorkflowResponse(BaseModel):
     workflow_id: str
@@ -92,9 +63,8 @@ class ExecutionRequest(BaseModel):
 class ExecutionResponse(BaseModel):
     execution_id: str
     workflow_id: str
-    status: str
     started_at: str
-    parameters: Optional[Dict[str, Any]] = None
+    status: str
 
 class ValidationRequest(BaseModel):
     yaml: str
@@ -107,7 +77,7 @@ class ValidationResult(BaseModel):
 
 class CodeGenerationRequest(BaseModel):
     workflow_id: Optional[str] = None
-    yaml_content: Optional[str] = None
+    yaml_content: str
 
 class CodeGenerationResult(BaseModel):
     success: bool
@@ -136,296 +106,199 @@ class SecretRequest(BaseModel):
     key: str
     value: str
 
-# Authentication dependency
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # Simplified auth - in production, validate JWT token
-    if not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return {"user_id": "system", "username": "admin"}  # Mock user
+async def get_current_user(credentials = Depends(security)):
+    # Simplified auth for demo - in production, validate JWT token
+    return {"user_id": "demo_user", "username": "demo"}
 
-# Create FastAPI app
 app = FastAPI(
     title="Workflow Orchestrator API",
     description="AI-native workflow orchestration system",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    version="0.1.0",
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
 )
 
-# Middleware
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# Exception handlers
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return {
-        "error": {
-            "message": exc.detail,
-            "code": exc.status_code,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    }
+    return {"detail": exc.detail, "status_code": exc.status_code}
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    logger.error("Unexpected error", error=str(exc), path=request.url.path)
-    return {
-        "error": {
-            "message": "Internal server error",
-            "code": 500,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    }
+    logger.error(f"Unhandled exception: {str(exc)}")
+    return {"detail": "Internal server error", "status_code": 500}
 
-# Startup and shutdown events
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup"""
-    try:
-        # Initialize storage
-        storage = SQLiteBackend(settings.database_url)
-        await storage.initialize()
-        
-        # Initialize workflow engine
-        app_state["engine"] = WorkflowEngine(storage)
-        await app_state["engine"].start()
-        
-        # Initialize monitoring
-        app_state["metrics_collector"] = MetricsCollector()
-        app_state["alert_manager"] = AlertManager()
-        await app_state["alert_manager"].start()
-        
-        # Initialize event stream
-        app_state["event_stream"] = get_event_stream()
-        
-        # Initialize scheduler
-        if features.scheduling:
-            app_state["scheduler"] = CronScheduler()
-            await app_state["scheduler"].start()
-        
-        # Load plugins
-        plugin_registry.load_plugins()
-        
-        logger.info("Application startup completed successfully")
-        
-    except Exception as e:
-        logger.error("Startup failed", error=str(e))
-        raise
+    logger.info("Starting Workflow Orchestrator API")
+    storage = SQLiteBackend(settings.database_url)
+    await storage.initialize()
+    app_state["storage"] = storage
+    app_state["metrics_collector"] = MetricsCollector()
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on shutdown"""
-    try:
-        if app_state["engine"]:
-            await app_state["engine"].stop()
-        
-        if app_state["alert_manager"]:
-            await app_state["alert_manager"].stop()
-        
-        if app_state["scheduler"]:
-            await app_state["scheduler"].stop()
-        
-        # Close websocket connections
-        for connections in app_state["websocket_connections"].values():
-            for ws in connections:
-                try:
-                    await ws.close()
-                except:
-                    pass
-        
-        logger.info("Application shutdown completed")
-        
-    except Exception as e:
-        logger.error("Shutdown error", error=str(e))
+    logger.info("Shutting down Workflow Orchestrator API")
+    if app_state.get("storage"):
+        await app_state["storage"].close()
 
-# Health and System endpoints
 @app.get("/api/v1/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0",
-        "services": {
-            "engine": app_state["engine"] is not None,
-            "metrics": app_state["metrics_collector"] is not None,
-            "alerts": app_state["alert_manager"] is not None
-        }
-    }
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat() + "Z"}
 
 @app.get("/api/v1/system/info")
 async def get_system_info():
-    """Get system information"""
+    collector = app_state["metrics_collector"]
     return {
-        "version": "1.0.0",
-        "features": {
-            "enterprise": features.enterprise_auth,
-            "ai_optimizer": features.ai_optimizer,
-            "marketplace": features.marketplace,
-            "multitenancy": features.multitenancy
-        },
-        "plugins": {
-            "total": len(plugin_registry.list_plugins()),
-            "loaded": len([p for p in plugin_registry.list_plugins() if p.get("status") == "loaded"])
-        },
-        "settings": {
-            "max_concurrent": settings.worker_concurrency,
-            "worker_timeout": settings.worker_timeout
+        "version": "0.1.0",
+        "environment": settings.environment,
+        "features": [],
+        "uptime": 0,
+        "stats": {
+            "total_workflows": len(app_state["workflows"]),
+            "active_workflows": 0,
+            "total_executions": len(app_state["executions"]),
+            "successful_executions": 0,
+            "failed_executions": 0
         }
     }
 
-@app.get("/api/v1/system/metrics")
-async def get_system_metrics(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    metrics: Optional[List[str]] = Query(None)
-):
-    """Get system-wide metrics"""
-    collector = app_state["metrics_collector"]
-    if not collector:
-        raise HTTPException(status_code=503, detail="Metrics collector not available")
-    
-    # Implementation would fetch metrics based on parameters
-    return {
-        "cpu_usage": 45.2,
-        "memory_usage": 67.8,
-        "active_workflows": len(app_state["workflows"]),
-        "active_executions": len(app_state["executions"]),
-        "total_events": 1247,
-        "error_rate": 2.1
-    }
-
-# Authentication endpoints
 @app.post("/api/v1/auth/login")
 async def login(credentials: dict):
-    """Authenticate user"""
-    # Simplified auth - implement proper authentication
     username = credentials.get("username")
     password = credentials.get("password")
     
-    if username == "admin" and password == "admin":
-        token = str(uuid.uuid4())  # Generate proper JWT in production
-        return {
-            "token": token,
-            "user": {
-                "id": "1",
-                "username": username,
-                "role": "admin"
-            }
-        }
-    
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+    # Demo auth - accept any credentials
+    token = str(uuid.uuid4())
+    return {"token": token, "user": {"username": username}}
 
 @app.post("/api/v1/auth/logout")
 async def logout(user: dict = Depends(get_current_user)):
-    """Logout user"""
     return {"message": "Logged out successfully"}
 
-# Workflow endpoints
 @app.get("/api/v1/workflows")
-async def list_workflows(
-    limit: int = 100,
-    offset: int = 0,
-    status: Optional[str] = None,
-    author: Optional[str] = None,
-    search: Optional[str] = None
-):
-    """List workflows with filtering and pagination"""
+async def list_workflows(limit: int = 10, offset: int = 0):
     workflows = []
-    
-    # Get workflows from storage or app state
     for workflow_id, workflow_data in app_state["workflows"].items():
-        if status and workflow_data.get("status") != status:
-            continue
-        if author and workflow_data.get("author") != author:
-            continue
-        if search and search.lower() not in workflow_data.get("name", "").lower():
-            continue
-        
         workflows.append({
             "workflow_id": workflow_id,
-            "name": workflow_data.get("name", ""),
-            "description": workflow_data.get("description", ""),
-            "status": workflow_data.get("status", "created"),
-            "created_at": workflow_data.get("created_at", datetime.utcnow().isoformat()),
-            "states_count": workflow_data.get("states_count", 0),
-            "author": workflow_data.get("author", ""),
-            "last_execution": workflow_data.get("last_execution")
+            "name": workflow_data["name"],
+            "description": workflow_data["description"],
+            "status": "created",
+            "created_at": workflow_data["created_at"],
+            "updated_at": workflow_data["updated_at"],
+            "states_count": workflow_data.get("states_count", 0)
         })
     
-    # Apply pagination
     total = len(workflows)
     workflows = workflows[offset:offset + limit]
     
     return {
-        "workflows": workflows,
+        "items": workflows,
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
+        "has_more": offset + limit < total
     }
 
 @app.get("/api/v1/workflows/{workflow_id}")
 async def get_workflow(workflow_id: str):
-    """Get workflow details"""
-    if workflow_id not in app_state["workflows"]:
+    workflow_data = app_state["workflows"].get(workflow_id)
+    if not workflow_data:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    
-    return app_state["workflows"][workflow_id]
+    return workflow_data
 
-@app.post("/api/v1/workflows")
-async def create_workflow(workflow: WorkflowCreate, background_tasks: BackgroundTasks):
-    """Create a new workflow"""
+@app.get("/api/v1/workflows/{workflow_id}/status")
+async def get_workflow_status(workflow_id: str):
+    """Get current status of a workflow including running executions."""
     try:
-        workflow_id = str(uuid.uuid4())
+        # Check if workflow exists
+        workflow_data = app_state["workflows"].get(workflow_id)
+        if not workflow_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
         
-        # Parse and validate YAML
-        parser = WorkflowParser()
-        try:
-            workflow_spec = parser.parse_string(workflow.yaml_content)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid workflow YAML: {str(e)}")
+        # Get running executions for this workflow
+        running_executions = [
+            exec_data for exec_id, exec_data in app_state["executions"].items()
+            if exec_data.get("workflow_id") == workflow_id and exec_data.get("status") == "running"
+        ]
         
-        # Store workflow
-        workflow_data = {
-            "workflow_id": workflow_id,
-            "name": workflow.name,
-            "description": workflow.description,
-            "yaml_content": workflow.yaml_content,
-            "status": "created",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-            "states_count": len(workflow_spec.states),
-            "author": "system",  # Get from auth context
-            "metadata": workflow.metadata or {}
-        }
+        # Get latest execution
+        latest_execution = None
+        executions = [
+            exec_data for exec_id, exec_data in app_state["executions"].items()
+            if exec_data.get("workflow_id") == workflow_id
+        ]
+        if executions:
+            latest_execution = max(executions, key=lambda x: x.get("started_at", ""))
         
-        app_state["workflows"][workflow_id] = workflow_data
-        
-        # Auto-start if requested
-        if workflow.auto_start:
-            background_tasks.add_task(execute_workflow_background, workflow_id)
+        # Determine workflow status
+        if running_executions:
+            status = "running"
+        elif latest_execution:
+            status = latest_execution.get("status", "idle")
+        else:
+            status = "idle"
         
         return {
             "workflow_id": workflow_id,
-            "name": workflow.name,
-            "status": "created",
-            "message": "Workflow created successfully"
+            "status": status,
+            "running_executions": len(running_executions),
+            "total_executions": len(executions),
+            "latest_execution": latest_execution,
+            "last_updated": datetime.utcnow().isoformat() + "Z"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to create workflow", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting workflow status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/v1/workflows")
+async def create_workflow(workflow: WorkflowCreate, background_tasks: BackgroundTasks):
+    workflow_id = str(uuid.uuid4())
+    parser = WorkflowParser()
+    
+    try:
+        workflow_spec = parser.parse_string(workflow.yaml_content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid workflow YAML: {str(e)}")
+    
+    workflow_data = {
+        "workflow_id": workflow_id,
+        "name": workflow.name,
+        "description": workflow.description,
+        "yaml_content": workflow.yaml_content,
+        "status": "created",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "states_count": len(workflow_spec.states),
+        "metadata": workflow.metadata or {}
+    }
+    
+    app_state["workflows"][workflow_id] = workflow_data
+    
+    return {
+        "workflow_id": workflow_id,
+        "name": workflow.name,
+        "description": workflow.description,
+        "status": "created",
+        "created_at": workflow_data["created_at"],
+        "updated_at": workflow_data["updated_at"],
+        "states_count": workflow_data["states_count"]
+    }
 
 @app.post("/api/v1/workflows/from-yaml")
 async def create_workflow_from_yaml(request: dict):
-    """Create workflow from YAML content"""
     name = request.get("name")
     yaml_content = request.get("yaml_content")
     auto_start = request.get("auto_start", False)
@@ -443,139 +316,113 @@ async def create_workflow_from_yaml(request: dict):
 
 @app.put("/api/v1/workflows/{workflow_id}")
 async def update_workflow(workflow_id: str, updates: WorkflowUpdate):
-    """Update workflow"""
-    if workflow_id not in app_state["workflows"]:
+    workflow_data = app_state["workflows"].get(workflow_id)
+    if not workflow_data:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    workflow_data = app_state["workflows"][workflow_id]
-    
-    if updates.name is not None:
-        workflow_data["name"] = updates.name
-    if updates.description is not None:
-        workflow_data["description"] = updates.description
-    if updates.yaml_content is not None:
-        workflow_data["yaml_content"] = updates.yaml_content
-        # Re-parse and validate
+    if updates.yaml_content:
+        parser = WorkflowParser()
         try:
-            parser = WorkflowParser()
             workflow_spec = parser.parse_string(updates.yaml_content)
             workflow_data["states_count"] = len(workflow_spec.states)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid YAML: {str(e)}")
-    if updates.metadata is not None:
-        workflow_data["metadata"] = updates.metadata
+            raise HTTPException(status_code=400, detail=f"Invalid workflow YAML: {str(e)}")
     
-    workflow_data["updated_at"] = datetime.utcnow().isoformat()
+    if updates.name:
+        workflow_data["name"] = updates.name
+    if updates.description is not None:
+        workflow_data["description"] = updates.description
+    if updates.yaml_content:
+        workflow_data["yaml_content"] = updates.yaml_content
+    
+    workflow_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
     
     return workflow_data
 
 @app.delete("/api/v1/workflows/{workflow_id}")
 async def delete_workflow(workflow_id: str):
-    """Delete workflow"""
     if workflow_id not in app_state["workflows"]:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    # Cancel any running executions
-    for execution_id, execution in app_state["executions"].items():
-        if execution.get("workflow_id") == workflow_id and execution.get("status") == "running":
-            execution["status"] = "cancelled"
-    
-    # Remove workflow
     del app_state["workflows"][workflow_id]
-    
     return {"message": "Workflow deleted successfully"}
 
 @app.post("/api/v1/workflows/{workflow_id}/duplicate")
 async def duplicate_workflow(workflow_id: str, request: dict):
-    """Duplicate a workflow"""
-    if workflow_id not in app_state["workflows"]:
+    original = app_state["workflows"].get(workflow_id)
+    if not original:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    original = app_state["workflows"][workflow_id]
     new_name = request.get("name", f"{original['name']} (Copy)")
+    new_workflow_id = str(uuid.uuid4())
     
-    workflow = WorkflowCreate(
-        name=new_name,
-        description=original.get("description", ""),
-        yaml_content=original["yaml_content"],
-        auto_start=False
-    )
+    new_workflow = original.copy()
+    new_workflow.update({
+        "workflow_id": new_workflow_id,
+        "name": new_name,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.utcnow().isoformat() + "Z"
+    })
     
-    return await create_workflow(workflow, BackgroundTasks())
+    app_state["workflows"][new_workflow_id] = new_workflow
+    
+    return {
+        "workflow_id": new_workflow_id,
+        "name": new_name,
+        "description": new_workflow["description"],
+        "status": "created",
+        "created_at": new_workflow["created_at"],
+        "updated_at": new_workflow["updated_at"],
+        "states_count": new_workflow["states_count"]
+    }
 
-# Workflow validation
 @app.post("/api/v1/workflows/validate-yaml")
 async def validate_yaml_workflow(request: ValidationRequest):
-    """Validate workflow YAML"""
+    parser = WorkflowParser()
     try:
-        parser = WorkflowParser()
         spec = parser.parse_string(request.yaml)
-        
-        return ValidationResult(
-            is_valid=True,
-            errors=[],
-            warnings=[],
-            info={
-                "states_count": len(spec.states),
-                "integrations": len(spec.integrations),
-                "name": spec.name,
-                "version": spec.version
-            }
-        )
-        
+        return ValidationResult(is_valid=True, info={"states_count": len(spec.states)})
     except Exception as e:
         error_info = {
             "message": str(e),
-            "type": type(e).__name__,
-            "line": getattr(e, 'line', None)
+            "path": "workflow",
+            "code": "PARSE_ERROR"
         }
-        
-        return ValidationResult(
-            is_valid=False,
-            errors=[error_info],
-            warnings=[],
-            info={}
-        )
+        return ValidationResult(is_valid=False, errors=[error_info])
 
 @app.post("/api/v1/workflows/{workflow_id}/validate")
 async def validate_workflow_by_id(workflow_id: str):
-    """Validate existing workflow"""
-    if workflow_id not in app_state["workflows"]:
+    workflow_data = app_state["workflows"].get(workflow_id)
+    if not workflow_data:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    workflow_data = app_state["workflows"][workflow_id]
     request = ValidationRequest(yaml=workflow_data["yaml_content"])
-    
     return await validate_yaml_workflow(request)
 
-# Code generation
 @app.post("/api/v1/workflows/{workflow_id}/generate-code")
 async def generate_code_from_workflow(workflow_id: str):
-    """Generate code from workflow"""
-    if workflow_id not in app_state["workflows"]:
+    workflow_data = app_state["workflows"].get(workflow_id)
+    if not workflow_data:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    workflow_data = app_state["workflows"][workflow_id]
-    
     try:
-        # Create temporary directory for generation
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "generated"
-            output_dir.mkdir(exist_ok=True)
+            output_dir.mkdir(parents=True)
             
-            # Generate code
             generator = CodeGenerator()
             generator.generate_from_string(workflow_data["yaml_content"], output_dir)
             
             # Create zip file
             zip_path = Path(temp_dir) / f"{workflow_data['name']}.zip"
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
                 for file_path in output_dir.rglob('*'):
                     if file_path.is_file():
                         arcname = file_path.relative_to(output_dir)
                         zipf.write(file_path, arcname)
             
-            # Read zip content as base64
+            # Read zip content
             with open(zip_path, 'rb') as f:
                 zip_content = base64.b64encode(f.read()).decode('utf-8')
             
@@ -584,9 +431,8 @@ async def generate_code_from_workflow(workflow_id: str):
                 zip_content=zip_content,
                 message="Code generated successfully"
             )
-            
     except Exception as e:
-        logger.error("Code generation failed", error=str(e))
+        logger.error(f"Error generating code: {str(e)}")
         return CodeGenerationResult(
             success=False,
             message=f"Code generation failed: {str(e)}"
@@ -594,19 +440,14 @@ async def generate_code_from_workflow(workflow_id: str):
 
 @app.post("/api/v1/workflows/generate-code-from-yaml")
 async def generate_code_from_yaml_direct(request: CodeGenerationRequest):
-    """Generate code directly from YAML"""
-    if not request.yaml_content:
-        raise HTTPException(status_code=400, detail="yaml_content is required")
-    
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "generated"
-            output_dir.mkdir(exist_ok=True)
+            output_dir.mkdir(parents=True)
             
             generator = CodeGenerator()
             generator.generate_from_string(request.yaml_content, output_dir)
             
-            # Read generated files
             files = {}
             for file_path in output_dir.rglob('*'):
                 if file_path.is_file():
@@ -619,118 +460,144 @@ async def generate_code_from_yaml_direct(request: CodeGenerationRequest):
                 files=files,
                 message="Code generated successfully"
             )
-            
     except Exception as e:
+        logger.error(f"Error generating code from YAML: {str(e)}")
         return CodeGenerationResult(
             success=False,
             message=f"Code generation failed: {str(e)}"
         )
 
-# Workflow execution
 @app.post("/api/v1/workflows/{workflow_id}/execute")
-async def execute_workflow(workflow_id: str, request: ExecutionRequest):
-    """Execute a workflow"""
-    if workflow_id not in app_state["workflows"]:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-    
-    workflow_data = app_state["workflows"][workflow_id]
-    execution_id = str(uuid.uuid4())
-    
+async def execute_workflow(workflow_id: str, request: ExecutionRequest, background_tasks: BackgroundTasks):
+    """Execute a workflow."""
     try:
+        # Check if workflow exists
+        workflow_data = app_state["workflows"].get(workflow_id)
+        if not workflow_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        
+        execution_id = str(uuid.uuid4())
+        
         # Create execution record
         execution_data = {
             "execution_id": execution_id,
             "workflow_id": workflow_id,
-            "workflow_name": workflow_data["name"],
             "status": "running",
-            "started_at": datetime.utcnow().isoformat(),
-            "parameters": request.parameters or {},
-            "timeout": request.timeout,
-            "priority": request.priority,
+            "started_at": datetime.utcnow().isoformat() + "Z",
+            "completed_at": None,
+            "current_state": None,
+            "parameters": request.parameters,
+            "error": None,
             "states": {},
-            "metrics": {
-                "totalStates": 0,
-                "completedStates": 0,
-                "failedStates": 0,
-                "activeStates": 0
-            }
+            "completed_states": 0,
+            "total_states": 0
         }
         
         app_state["executions"][execution_id] = execution_data
-        workflow_data["last_execution"] = execution_id
         
-        # Start execution in background
-        asyncio.create_task(execute_workflow_background(workflow_id, execution_id))
+        # Start background execution
+        background_tasks.add_task(execute_workflow_background, workflow_id, execution_id)
         
-        return ExecutionResponse(
-            execution_id=execution_id,
-            workflow_id=workflow_id,
-            status="running",
-            started_at=execution_data["started_at"],
-            parameters=request.parameters
-        )
+        # Return execution info immediately
+        return {
+            "execution_id": execution_id,
+            "workflow_id": workflow_id,
+            "status": "running",
+            "started_at": execution_data["started_at"],
+            "parameters": request.parameters
+        }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to start workflow execution", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error executing workflow {workflow_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start workflow execution")
 
 @app.get("/api/v1/workflows/{workflow_id}/executions")
-async def get_workflow_executions(
-    workflow_id: str,
-    limit: int = 50,
-    offset: int = 0
-):
-    """Get workflow executions"""
-    if workflow_id not in app_state["workflows"]:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-    
+async def list_executions(workflow_id: str, limit: int = 10, offset: int = 0):
     executions = [
-        execution for execution in app_state["executions"].values()
-        if execution.get("workflow_id") == workflow_id
+        exec_data for exec_id, exec_data in app_state["executions"].items()
+        if exec_data.get("workflow_id") == workflow_id
     ]
     
-    # Sort by start time (newest first)
+    # Sort by started_at desc
     executions.sort(key=lambda x: x.get("started_at", ""), reverse=True)
     
     total = len(executions)
     executions = executions[offset:offset + limit]
     
     return {
-        "executions": executions,
-        "total": total
+        "items": executions,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
     }
 
-# Execution monitoring
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}")
 async def get_execution(workflow_id: str, execution_id: str):
-    """Get execution details"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
     if execution.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Execution not found for this workflow")
     
     return execution
 
+@app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/status")
+async def get_execution_status(workflow_id: str, execution_id: str):
+    """Get detailed status of a specific execution."""
+    try:
+        execution = app_state["executions"].get(execution_id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        
+        if execution.get("workflow_id") != workflow_id:
+            raise HTTPException(status_code=404, detail="Execution not found for this workflow")
+        
+        # Add some mock state information for now
+        states = execution.get("states", {})
+        
+        return {
+            "execution_id": execution_id,
+            "workflow_id": workflow_id,
+            "status": execution.get("status", "unknown"),
+            "started_at": execution.get("started_at"),
+            "completed_at": execution.get("completed_at"),
+            "current_state": execution.get("current_state"),
+            "states": states,
+            "progress": {
+                "total_states": len(states),
+                "completed_states": len([s for s in states.values() if s.get("status") == "completed"]),
+                "failed_states": len([s for s in states.values() if s.get("status") == "failed"]),
+                "running_states": len([s for s in states.values() if s.get("status") == "running"])
+            },
+            "error": execution.get("error"),
+            "last_updated": datetime.utcnow().isoformat() + "Z"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting execution status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/states")
 async def get_execution_states(workflow_id: str, execution_id: str):
-    """Get execution states"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
-    return list(execution.get("states", {}).values())
+    states = execution.get("states", {})
+    return list(states.values())
 
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/metrics")
 async def get_execution_metrics(workflow_id: str, execution_id: str):
-    """Get execution metrics"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
-    
-    # Calculate real-time metrics
     states = execution.get("states", {})
     total_states = len(states)
     completed_states = len([s for s in states.values() if s.get("status") == "completed"])
@@ -753,286 +620,181 @@ async def get_execution_metrics(workflow_id: str, execution_id: str):
         "totalExecutionTime": total_execution_time,
         "avgStateTime": avg_state_time,
         "resourceUtilization": {
-            "cpu": 45.2,  # Mock data - implement real monitoring
-            "memory": 67.8,
-            "network": 23.1
+            "cpu": random.uniform(10, 80),
+            "memory": random.uniform(20, 70),
+            "network": random.uniform(5, 50)
         },
-        "throughput": completed_states / max(total_execution_time / 1000, 1),
-        "errorRate": (failed_states / max(total_states, 1)) * 100
+        "throughput": completed_states / (total_execution_time / 1000) if total_execution_time > 0 else 0,
+        "errorRate": failed_states / total_states if total_states > 0 else 0,
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/events")
-async def get_execution_events(
-    workflow_id: str,
-    execution_id: str,
-    limit: int = 100,
-    level: Optional[str] = None,
-    event_type: Optional[str] = None,
-    since: Optional[str] = None
-):
-    """Get execution events"""
-    # Mock events - implement real event tracking
+async def get_execution_events(workflow_id: str, execution_id: str, limit: int = 100, level: str = None, event_type: str = None):
+    # Mock events for demo
     events = [
         {
             "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.utcnow().isoformat() + "Z",
             "type": "state_started",
-            "level": "info",
-            "message": "State 'start' began execution",
             "state": "start",
-            "metadata": {}
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
-            "type": "state_completed",
-            "level": "success",
-            "message": "State 'start' completed successfully",
-            "state": "start",
-            "metadata": {"duration": 150}
+            "message": "Execution started",
+            "level": "info"
         }
     ]
     
-    # Apply filters
-    if level and level != "all":
+    if level:
         events = [e for e in events if e["level"] == level]
-    if event_type and event_type != "all":
+    if event_type:
         events = [e for e in events if e["type"] == event_type]
     
     return events[:limit]
 
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/alerts")
 async def get_execution_alerts(workflow_id: str, execution_id: str):
-    """Get execution alerts"""
-    # Mock alerts - implement real alert tracking
-    return [
-        {
-            "id": str(uuid.uuid4()),
-            "severity": "warning",
-            "title": "High CPU Usage",
-            "message": "CPU usage exceeded 80% for more than 2 minutes",
-            "timestamp": datetime.utcnow().isoformat(),
-            "resolved": False,
-            "source": "resource_monitor"
-        }
-    ]
+    # Mock alerts for demo
+    return []
 
 @app.get("/api/v1/workflows/{workflow_id}/executions/{execution_id}/logs")
-async def get_execution_logs(
-    workflow_id: str,
-    execution_id: str,
-    limit: int = 100,
-    level: Optional[str] = None,
-    state: Optional[str] = None,
-    since: Optional[str] = None
-):
-    """Get execution logs"""
-    # Mock logs - implement real log aggregation
+async def get_execution_logs(workflow_id: str, execution_id: str, limit: int = 100, level: str = None, state: str = None):
+    # Mock logs for demo
     logs = [
         {
-            "timestamp": datetime.utcnow().isoformat(),
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": "info",
-            "message": "Workflow execution started",
-            "state": None,
-            "execution_id": execution_id
-        },
-        {
-            "timestamp": datetime.utcnow().isoformat(),
-            "level": "debug",
-            "message": "State 'start' initialized",
-            "state": "start",
-            "execution_id": execution_id
+            "message": "Execution started",
+            "state": "start"
         }
     ]
+    
+    if level:
+        logs = [l for l in logs if l["level"] == level]
+    if state:
+        logs = [l for l in logs if l.get("state") == state]
     
     return logs[:limit]
 
-# Execution control
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/pause")
 async def pause_execution(workflow_id: str, execution_id: str):
-    """Pause execution"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
-    if execution["status"] != "running":
-        raise HTTPException(status_code=400, detail="Execution is not running")
-    
     execution["status"] = "paused"
-    execution["paused_at"] = datetime.utcnow().isoformat()
-    
-    return {"status": "paused"}
+    return {"success": True, "message": "Execution paused"}
 
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/resume")
 async def resume_execution(workflow_id: str, execution_id: str):
-    """Resume execution"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
-    if execution["status"] != "paused":
-        raise HTTPException(status_code=400, detail="Execution is not paused")
-    
     execution["status"] = "running"
-    execution["resumed_at"] = datetime.utcnow().isoformat()
-    
-    return {"status": "resumed"}
+    return {"success": True, "message": "Execution resumed"}
 
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/cancel")
 async def cancel_execution(workflow_id: str, execution_id: str):
-    """Cancel execution"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
     execution["status"] = "cancelled"
-    execution["cancelled_at"] = datetime.utcnow().isoformat()
-    
-    return {"status": "cancelled"}
+    execution["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    return {"success": True, "message": "Execution cancelled"}
 
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/retry")
 async def retry_execution(workflow_id: str, execution_id: str):
-    """Retry execution"""
-    if execution_id not in app_state["executions"]:
+    original_execution = app_state["executions"].get(execution_id)
+    if not original_execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    # Create new execution
     new_execution_id = str(uuid.uuid4())
-    original_execution = app_state["executions"][execution_id]
-    
     new_execution = {
-        **original_execution,
         "execution_id": new_execution_id,
+        "workflow_id": workflow_id,
         "status": "running",
-        "started_at": datetime.utcnow().isoformat(),
-        "parent_execution": execution_id,
-        "retry_count": original_execution.get("retry_count", 0) + 1
+        "started_at": datetime.utcnow().isoformat() + "Z",
+        "completed_at": None,
+        "current_state": None,
+        "parameters": original_execution.get("parameters"),
+        "error": None,
+        "states": {},
+        "completed_states": 0,
+        "total_states": 0
     }
     
     app_state["executions"][new_execution_id] = new_execution
-    
-    # Start new execution
-    asyncio.create_task(execute_workflow_background(workflow_id, new_execution_id))
-    
-    return {
-        "new_execution_id": new_execution_id,
-        "status": "running"
-    }
+    return {"execution_id": new_execution_id}
 
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/states/{state_name}/retry")
 async def retry_state(workflow_id: str, execution_id: str, state_name: str):
-    """Retry a specific state"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
     states = execution.get("states", {})
+    if state_name in states:
+        state = states[state_name]
+        state["status"] = "pending"
+        state["attempts"] = state.get("attempts", 0) + 1
+        state["error"] = None
     
-    if state_name not in states:
-        raise HTTPException(status_code=404, detail="State not found")
-    
-    state = states[state_name]
-    state["status"] = "running"
-    state["retry_count"] = state.get("retry_count", 0) + 1
-    state["last_retry"] = datetime.utcnow().isoformat()
-    
-    return {"status": "retrying", "state": state_name}
+    return {"success": True}
 
 @app.post("/api/v1/workflows/{workflow_id}/executions/{execution_id}/states/{state_name}/skip")
 async def skip_state(workflow_id: str, execution_id: str, state_name: str):
-    """Skip a state"""
-    if execution_id not in app_state["executions"]:
+    execution = app_state["executions"].get(execution_id)
+    if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    execution = app_state["executions"][execution_id]
     states = execution.get("states", {})
+    if state_name in states:
+        state = states[state_name]
+        state["status"] = "skipped"
+        state["completed_at"] = datetime.utcnow().isoformat() + "Z"
     
-    if state_name not in states:
-        raise HTTPException(status_code=404, detail="State not found")
-    
-    state = states[state_name]
-    state["status"] = "skipped"
-    state["skipped_at"] = datetime.utcnow().isoformat()
-    
-    return {"status": "skipped", "state": state_name}
+    return {"success": True}
 
-# Templates
 @app.get("/api/v1/workflows/templates")
 async def list_templates():
-    """List workflow templates"""
-    return [
-        {
-            "id": "email-processor",
-            "name": "Email Processor",
-            "description": "Process incoming emails and send notifications",
-            "category": "communication",
-            "variables": ["EMAIL_QUERY", "SLACK_CHANNEL"],
-            "preview": "A workflow that checks for urgent emails and sends Slack notifications"
-        },
-        {
-            "id": "data-pipeline",
-            "name": "Data Pipeline",
-            "description": "ETL pipeline for data processing",
-            "category": "data",
-            "variables": ["SOURCE_URL", "OUTPUT_FORMAT"],
-            "preview": "Extract, transform, and load data from various sources"
-        }
-    ]
+    return []
 
 @app.get("/api/v1/workflows/templates/{template_id}")
 async def get_template(template_id: str):
-    """Get template details"""
     templates = {
-        "email-processor": {
-            "id": "email-processor",
-            "name": "Email Processor",
-            "description": "Process incoming emails and send notifications",
-            "yaml_content": """name: email_processor
-version: 1.0.0
-description: "Process urgent emails and send notifications"
-states:
-  - name: start
-    type: builtin.start
-  - name: fetch_emails
-    type: gmail.read_emails
-  - name: send_notification
-    type: slack.send_message
-  - name: end
-    type: builtin.end""",
-            "variables": ["EMAIL_QUERY", "SLACK_CHANNEL"]
+        "basic": {
+            "id": "basic",
+            "name": "Basic Workflow",
+            "description": "A simple workflow template",
+            "yaml_content": "name: basic_workflow\nversion: '1.0'\nstates:\n  - name: start\n    type: builtin.start"
         }
     }
     
-    if template_id not in templates:
+    template = templates.get(template_id)
+    if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
-    return templates[template_id]
+    return template
 
 @app.post("/api/v1/workflows/from-template")
 async def create_workflow_from_template(request: dict):
-    """Create workflow from template"""
     template_id = request.get("template")
     variables = request.get("variables", {})
     
     template = await get_template(template_id)
-    
-    # Replace variables in template
     yaml_content = template["yaml_content"]
+    
+    # Apply variables
     for var_name, var_value in variables.items():
         yaml_content = yaml_content.replace(f"${{{var_name}}}", str(var_value))
     
-    workflow = WorkflowCreate(
-        name=f"{template['name']} - {datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        description=template["description"],
-        yaml_content=yaml_content
-    )
-    
-    return await create_workflow(workflow, BackgroundTasks())
+    return await create_workflow_from_yaml({
+        "name": template["name"],
+        "yaml_content": yaml_content
+    })
 
-# Examples
 @app.get("/api/v1/workflows/examples")
 async def get_workflow_examples():
-    """Get workflow examples"""
     examples_dir = Path(__file__).parent.parent.parent.parent / "examples"
     examples = []
     
@@ -1043,227 +805,273 @@ async def get_workflow_examples():
                     content = f.read()
                     yaml_data = yaml.safe_load(content)
                     
-                examples.append({
-                    "id": yaml_file.stem,
-                    "name": yaml_data.get("name", yaml_file.stem),
-                    "description": yaml_data.get("description", ""),
-                    "content": content
-                })
+                    examples.append({
+                        "name": yaml_data.get("name", yaml_file.stem),
+                        "description": yaml_data.get("description", ""),
+                        "yaml_content": content
+                    })
             except Exception as e:
-                logger.warning("Failed to load example", file=str(yaml_file), error=str(e))
+                logger.warning(f"Failed to load example {yaml_file}: {e}")
     
     return examples
 
-# Plugins and nodes
 @app.get("/api/v1/workflows/nodes")
 async def get_available_nodes():
-    """Get available node types"""
-    discovery = PluginDiscovery()
-    plugins = discovery.discover_all_plugins()
+    # Mock plugin discovery
+    try:
+        from enterprise.ai.plugin_discovery import PluginDiscovery
+        discovery = PluginDiscovery()
+        plugins = discovery.discover_all_plugins()
+        nodes = []
+        
+        for plugin_name, plugin_info in plugins.items():
+            states = plugin_info.get("states_detailed", {})
+            for state_name, state_info in states.items():
+                nodes.append({
+                    "id": f"{plugin_name}.{state_name}",
+                    "name": f"{plugin_name}.{state_name}",
+                    "category": "integration",
+                    "description": state_info.get("description", ""),
+                    "inputs": [],
+                    "outputs": []
+                })
+    except ImportError:
+        nodes = []
     
-    nodes = []
-    for plugin_name, plugin_info in plugins.items():
-        states = plugin_info.get("states_detailed", {})
-        for state_name, state_info in states.items():
-            nodes.append({
-                "type": f"{plugin_name}.{state_name}",
-                "name": state_name.replace("_", " ").title(),
-                "description": state_info.get("description", ""),
-                "category": plugin_info.get("integration_type", "utility"),
-                "inputs": state_info.get("inputs", []),
-                "outputs": state_info.get("outputs", []),
-                "plugin": plugin_name
-            })
-    
-    # Add built-in nodes
+    # Add builtin nodes
     builtin_nodes = [
         {
-            "type": "builtin.start",
+            "id": "builtin.start",
             "name": "Start",
-            "description": "Workflow start point",
-            "category": "control",
+            "category": "builtin",
+            "description": "Workflow start state",
             "inputs": [],
-            "outputs": ["next"]
-        },
-        {
-            "type": "builtin.end",
-            "name": "End",
-            "description": "Workflow end point",
-            "category": "control",
-            "inputs": ["previous"],
             "outputs": []
         },
         {
-            "type": "builtin.conditional",
-            "name": "Conditional",
-            "description": "Conditional branching",
-            "category": "control",
-            "inputs": ["condition"],
-            "outputs": ["true", "false"]
+            "id": "builtin.end",
+            "name": "End",
+            "category": "builtin",
+            "description": "Workflow end state",
+            "inputs": [],
+            "outputs": []
         }
     ]
     
-    return nodes + builtin_nodes
+    return builtin_nodes + nodes
 
 @app.get("/api/v1/plugins")
 async def list_plugins():
-    """List available plugins"""
-    return plugin_registry.list_plugins()
+    return []
 
 @app.get("/api/v1/plugins/{plugin_name}")
 async def get_plugin_info(plugin_name: str):
-    """Get plugin information"""
+    from plugins.registry import plugin_registry
+    
     plugin = plugin_registry.get_plugin(plugin_name)
     if not plugin:
         raise HTTPException(status_code=404, detail="Plugin not found")
     
-    discovery = PluginDiscovery()
-    plugins = discovery.discover_all_plugins()
-    
-    return plugins.get(plugin_name, {})
+    return {
+        "name": plugin.manifest.name,
+        "version": plugin.manifest.version,
+        "description": plugin.manifest.description,
+        "states": list(plugin.register_states().keys())
+    }
 
-# File operations
-@app.post("/api/v1/files/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    workflow_id: Optional[str] = Form(None)
-):
-    """Upload a file"""
+@app.post("/api/v1/files")
+async def upload_file(file_data: dict):
     file_id = str(uuid.uuid4())
-    
-    # Save file (implement proper file storage)
     file_info = {
         "file_id": file_id,
-        "filename": file.filename,
-        "size": file.size,
-        "content_type": file.content_type,
-        "workflow_id": workflow_id,
-        "uploaded_at": datetime.utcnow().isoformat()
+        "filename": file_data.get("filename"),
+        "size": len(file_data.get("content", "")),
+        "content_type": file_data.get("content_type", "application/octet-stream"),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z"
     }
-    
     return file_info
 
 @app.get("/api/v1/files/{file_id}/download")
 async def download_file(file_id: str):
-    """Download a file"""
-    # Implement file retrieval
     raise HTTPException(status_code=404, detail="File not found")
 
-# WebSocket for real-time updates
 @app.websocket("/api/v1/workflows/{workflow_id}/executions/{execution_id}/ws")
 async def execution_websocket(websocket: WebSocket, workflow_id: str, execution_id: str):
-    """WebSocket endpoint for real-time execution monitoring"""
+    """WebSocket endpoint for real-time execution updates."""
     await websocket.accept()
     
-    # Add to connections
-    if execution_id not in app_state["websocket_connections"]:
-        app_state["websocket_connections"][execution_id] = []
-    app_state["websocket_connections"][execution_id].append(websocket)
-    
     try:
+        # Verify execution exists
+        execution = app_state["executions"].get(execution_id)
+        if not execution or execution.get("workflow_id") != workflow_id:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Execution not found",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            })
+            await websocket.close()
+            return
+        
+        logger.info(f"WebSocket connected for execution {execution_id}")
+        
+        # Send initial status
+        await websocket.send_json({
+            "type": "execution_status",
+            "data": {
+                "execution_id": execution_id,
+                "workflow_id": workflow_id,
+                "status": execution.get("status", "unknown"),
+                "started_at": execution.get("started_at"),
+                "current_state": execution.get("current_state")
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        })
+        
+        # Keep connection alive and send periodic updates
         while True:
-            # Send periodic updates
-            if execution_id in app_state["executions"]:
-                execution = app_state["executions"][execution_id]
-                metrics = await get_execution_metrics(workflow_id, execution_id)
-                events = await get_execution_events(workflow_id, execution_id, limit=5)
+            try:
+                # Wait for either a message from client or timeout
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
                 
-                update = {
-                    "type": "execution_update",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "data": {
-                        "execution": execution,
-                        "metrics": metrics,
-                        "recent_events": events
-                    }
-                }
-                
-                await websocket.send_json(update)
-            
-            await asyncio.sleep(2)  # Update every 2 seconds
-            
-    except WebSocketDisconnect:
-        # Remove from connections
-        if execution_id in app_state["websocket_connections"]:
-            app_state["websocket_connections"][execution_id].remove(websocket)
+                # Handle client messages (like ping)
+                try:
+                    msg_data = json.loads(message)
+                    if msg_data.get("type") == "ping":
+                        await websocket.send_json({
+                            "type": "pong",
+                            "timestamp": datetime.utcnow().isoformat() + "Z"
+                        })
+                except json.JSONDecodeError:
+                    pass
+                    
+            except asyncio.TimeoutError:
+                # Send periodic status update
+                current_execution = app_state["executions"].get(execution_id)
+                if current_execution:
+                    await websocket.send_json({
+                        "type": "execution_update",
+                        "data": {
+                            "execution_id": execution_id,
+                            "status": current_execution.get("status", "unknown"),
+                            "current_state": current_execution.get("current_state"),
+                            "progress": {
+                                "completed": current_execution.get("completed_states", 0),
+                                "total": current_execution.get("total_states", 0)
+                            }
+                        },
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    })
+                    
+                    # Close if execution is complete
+                    if current_execution.get("status") in ["completed", "failed", "cancelled"]:
+                        await websocket.send_json({
+                            "type": "execution_complete",
+                            "data": {
+                                "execution_id": execution_id,
+                                "final_status": current_execution.get("status")
+                            },
+                            "timestamp": datetime.utcnow().isoformat() + "Z"
+                        })
+                        break
+                else:
+                    # Execution no longer exists
+                    break
+                    
     except Exception as e:
-        logger.error("WebSocket error", error=str(e))
-        await websocket.close()
+        logger.error(f"WebSocket error for execution {execution_id}: {str(e)}")
+        try:
+            await websocket.send_json({
+                "type": "error", 
+                "message": "Connection error",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            })
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+        logger.info(f"WebSocket disconnected for execution {execution_id}")
 
-# Background task for workflow execution
 async def execute_workflow_background(workflow_id: str, execution_id: str = None):
-    """Execute workflow in background"""
+    """Background task to simulate workflow execution."""
     try:
         if not execution_id:
             execution_id = str(uuid.uuid4())
         
-        execution = app_state["executions"][execution_id]
         workflow_data = app_state["workflows"][workflow_id]
+        execution = app_state["executions"][execution_id]
         
-        # Parse workflow
+        logger.info(f"Starting background execution for workflow {workflow_id}, execution {execution_id}")
+        
+        # Parse workflow to get states
         parser = WorkflowParser()
         workflow_spec = parser.parse_string(workflow_data["yaml_content"])
         
-        # Simulate workflow execution
-        execution["states"] = {}
-        
-        for i, state in enumerate(workflow_spec.states):
-            if execution["status"] in ["cancelled", "paused"]:
-                break
-            
-            state_data = {
-                "name": state.name,
-                "status": "running",
-                "started_at": datetime.utcnow().isoformat(),
-                "attempts": 1
+        # Initialize states
+        states = {}
+        for state_def in workflow_spec.states:
+            states[state_def.name] = {
+                "status": "pending",
+                "started_at": None,
+                "completed_at": None,
+                "duration": None,
+                "attempts": 0,
+                "error": None
             }
-            execution["states"][state.name] = state_data
+        
+        execution["states"] = states
+        execution["total_states"] = len(states)
+        execution["completed_states"] = 0
+        
+        # Simulate execution of each state
+        for i, state_def in enumerate(workflow_spec.states):
+            state_name = state_def.name
             
-            # Simulate state execution
-            await asyncio.sleep(1)  # Simulate work
+            # Update execution current state
+            execution["current_state"] = state_name
             
-            # Random success/failure for demo
-            import random
-            if random.random() > 0.1:  # 90% success rate
-                state_data["status"] = "completed"
-                state_data["completed_at"] = datetime.utcnow().isoformat()
-                state_data["duration"] = 1000  # Mock duration
+            # Update state to running
+            states[state_name]["status"] = "running"
+            states[state_name]["started_at"] = datetime.utcnow().isoformat() + "Z"
+            states[state_name]["attempts"] = 1
+            
+            logger.info(f"Executing state {state_name} in workflow {workflow_id}")
+            
+            # Simulate work (1-3 seconds per state)
+            await asyncio.sleep(random.uniform(1, 3))
+            
+            # Simulate occasional failures (10% chance)
+            if random.random() < 0.1:
+                states[state_name]["status"] = "failed"
+                states[state_name]["error"] = f"Simulated failure in state {state_name}"
+                states[state_name]["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                states[state_name]["duration"] = 2000  # 2 seconds in ms
+                
+                # Mark execution as failed
+                execution["status"] = "failed"
+                execution["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                execution["error"] = f"Workflow failed at state {state_name}"
+                
+                logger.error(f"Workflow {workflow_id} failed at state {state_name}")
+                return
             else:
-                state_data["status"] = "failed"
-                state_data["failed_at"] = datetime.utcnow().isoformat()
-                state_data["error"] = "Simulated failure"
-                break
+                # State completed successfully
+                states[state_name]["status"] = "completed"
+                states[state_name]["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                states[state_name]["duration"] = random.randint(1000, 3000)  # 1-3 seconds in ms
+                execution["completed_states"] += 1
         
-        # Update execution status
-        if execution["status"] == "cancelled":
-            pass  # Already set
-        elif any(s.get("status") == "failed" for s in execution["states"].values()):
-            execution["status"] = "failed"
-            execution["failed_at"] = datetime.utcnow().isoformat()
-        else:
-            execution["status"] = "completed"
-            execution["completed_at"] = datetime.utcnow().isoformat()
+        # Mark execution as completed
+        execution["status"] = "completed"
+        execution["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        execution["current_state"] = None
         
-        # Notify WebSocket connections
-        if execution_id in app_state["websocket_connections"]:
-            for ws in app_state["websocket_connections"][execution_id]:
-                try:
-                    await ws.send_json({
-                        "type": "execution_completed",
-                        "data": {"execution_id": execution_id, "status": execution["status"]}
-                    })
-                except:
-                    pass
+        logger.info(f"Workflow {workflow_id} execution {execution_id} completed successfully")
         
     except Exception as e:
-        logger.error("Workflow execution failed", error=str(e))
-        if execution_id in app_state["executions"]:
-            app_state["executions"][execution_id]["status"] = "failed"
-            app_state["executions"][execution_id]["error"] = str(e)
-
-# Serve static files (for UI) - commented out for development
-# app.mount("/", StaticFiles(directory="ui/dist", html=True), name="static")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        logger.error(f"Error in background execution: {str(e)}")
+        execution["status"] = "failed"
+        execution["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        execution["error"] = str(e)
