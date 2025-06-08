@@ -68,191 +68,340 @@ interface ExecutionEvent {
   metadata?: Record<string, any>
 }
 
-export default function ExecutionMonitor() {
-  const { workflowId, executionId } = useParams()
-  const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState<'overview' | 'states' | 'logs' | 'metrics' | 'timeline'>('overview')
-  const [selectedState, setSelectedState] = useState<string | null>(null)
-  const [logFilter, setLogFilter] = useState<string>('')
-  const [logLevel, setLogLevel] = useState<string>('all')
-  const [wsConnection, setWsConnection] = useState<WebSocket | null>(null)
+interface Alert {
+  id: string
+  type: 'warning' | 'error' | 'info'
+  message: string
+  timestamp: string
+  state?: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+}
 
-  // Real-time data fetching
-  const { data: execution, isLoading } = useQuery({
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'completed': return <CheckCircle className="w-4 h-4 text-green-500" />
+    case 'failed': return <XCircle className="w-4 h-4 text-red-500" />
+    case 'running': return <Activity className="w-4 h-4 text-blue-500 animate-pulse" />
+    case 'paused': return <Pause className="w-4 h-4 text-yellow-500" />
+    case 'pending': return <Clock className="w-4 h-4 text-gray-500" />
+    case 'retrying': return <RotateCcw className="w-4 h-4 text-orange-500 animate-spin" />
+    default: return <Clock className="w-4 h-4 text-gray-500" />
+  }
+}
+
+const getStateStatusColor = (status: string) => {
+  switch (status) {
+    case 'completed': return 'border-green-500 bg-green-50'
+    case 'failed': return 'border-red-500 bg-red-50'
+    case 'running': return 'border-blue-500 bg-blue-50'
+    case 'paused': return 'border-yellow-500 bg-yellow-50'
+    case 'pending': return 'border-gray-300 bg-gray-50'
+    case 'retrying': return 'border-orange-500 bg-orange-50'
+    default: return 'border-gray-300 bg-gray-50'
+  }
+}
+
+const formatDuration = (ms: number) => {
+  if (!ms) return '0ms'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${(ms / 60000).toFixed(1)}m`
+}
+
+const formatTimestamp = (timestamp: string) => {
+  return new Date(timestamp).toLocaleTimeString()
+}
+
+export default function ExecutionMonitor() {
+  const { workflowId, executionId } = useParams<{
+    workflowId: string
+    executionId: string
+  }>()
+  const queryClient = useQueryClient()
+  
+  const [selectedState, setSelectedState] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'overview' | 'states' | 'logs' | 'events' | 'metrics'>('overview')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [logFilter, setLogFilter] = useState<'all' | 'error' | 'warning' | 'info'>('all')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [websocket, setWebsocket] = useState<WebSocket | null>(null)
+
+  // Queries
+  const {
+    data: execution,
+    isLoading: executionLoading,
+    error: executionError,
+    refetch: refetchExecution
+  } = useQuery({
     queryKey: ['execution', workflowId, executionId],
     queryFn: () => workflowApi.getExecution(workflowId!, executionId!),
-    refetchInterval: 2000, // Fallback polling
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 2000 : false,
   })
 
-  const { data: states } = useQuery({
+  const {
+    data: states = [],
+    isLoading: statesLoading,
+    refetch: refetchStates
+  } = useQuery({
     queryKey: ['execution-states', workflowId, executionId],
     queryFn: () => workflowApi.getExecutionStates(workflowId!, executionId!),
-    refetchInterval: 1000,
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 2000 : false,
   })
 
-  const { data: metrics } = useQuery({
+  const {
+    data: metrics,
+    isLoading: metricsLoading,
+    refetch: refetchMetrics
+  } = useQuery({
     queryKey: ['execution-metrics', workflowId, executionId],
     queryFn: () => workflowApi.getExecutionMetrics(workflowId!, executionId!),
-    refetchInterval: 2000,
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 3000 : false,
   })
 
-  const { data: events } = useQuery({
+  const {
+    data: events = [],
+    refetch: refetchEvents
+  } = useQuery({
     queryKey: ['execution-events', workflowId, executionId],
     queryFn: () => workflowApi.getExecutionEvents(workflowId!, executionId!, { limit: 100 }),
-    refetchInterval: 1000,
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 2000 : false,
   })
 
-  const { data: logs } = useQuery({
-    queryKey: ['execution-logs', workflowId, executionId, logLevel],
+  const {
+    data: alerts = [],
+    refetch: refetchAlerts
+  } = useQuery({
+    queryKey: ['execution-alerts', workflowId, executionId],
+    queryFn: () => workflowApi.getExecutionAlerts(workflowId!, executionId!),
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 5000 : false,
+  })
+
+  const {
+    data: logs = [],
+    refetch: refetchLogs
+  } = useQuery({
+    queryKey: ['execution-logs', workflowId, executionId, logFilter],
     queryFn: () => workflowApi.getExecutionLogs(workflowId!, executionId!, { 
-      limit: 1000,
-      level: logLevel !== 'all' ? logLevel as any : undefined
+      limit: 500,
+      level: logFilter === 'all' ? undefined : logFilter
     }),
-    refetchInterval: 1000,
+    enabled: !!workflowId && !!executionId,
+    refetchInterval: autoRefresh ? 2000 : false,
   })
 
-  // WebSocket for real-time updates
-  useEffect(() => {
-    if (!workflowId || !executionId) return
-
-    const ws = workflowApi.createWebSocket(`/api/v1/workflows/${workflowId}/executions/${executionId}/ws`)
-    
-    ws.onopen = () => {
-      console.log('📡 WebSocket connected for real-time updates')
-      setWsConnection(ws)
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        console.log('📨 Real-time update:', data)
-        
-        // Invalidate relevant queries to trigger refetch
-        queryClient.invalidateQueries(['execution', workflowId, executionId])
-        queryClient.invalidateQueries(['execution-states', workflowId, executionId])
-        queryClient.invalidateQueries(['execution-metrics', workflowId, executionId])
-        queryClient.invalidateQueries(['execution-events', workflowId, executionId])
-        queryClient.invalidateQueries(['execution-logs', workflowId, executionId])
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error)
-      }
-    }
-
-    ws.onclose = () => {
-      console.log('📡 WebSocket disconnected')
-      setWsConnection(null)
-    }
-
-    ws.onerror = (error) => {
-      console.error('📡 WebSocket error:', error)
-    }
-
-    return () => {
-      ws.close()
-    }
-  }, [workflowId, executionId, queryClient])
-
-  // Execution control mutations
+  // Mutations
   const pauseMutation = useMutation({
     mutationFn: () => workflowApi.pauseExecution(workflowId!, executionId!),
     onSuccess: () => {
-      queryClient.invalidateQueries(['execution', workflowId, executionId])
+      queryClient.invalidateQueries({ queryKey: ['execution'] })
     }
   })
 
   const resumeMutation = useMutation({
     mutationFn: () => workflowApi.resumeExecution(workflowId!, executionId!),
     onSuccess: () => {
-      queryClient.invalidateQueries(['execution', workflowId, executionId])
+      queryClient.invalidateQueries({ queryKey: ['execution'] })
     }
   })
 
   const cancelMutation = useMutation({
     mutationFn: () => workflowApi.cancelExecution(workflowId!, executionId!),
     onSuccess: () => {
-      queryClient.invalidateQueries(['execution', workflowId, executionId])
+      queryClient.invalidateQueries({ queryKey: ['execution'] })
     }
   })
 
   const retryMutation = useMutation({
     mutationFn: () => workflowApi.retryExecution(workflowId!, executionId!),
     onSuccess: () => {
-      queryClient.invalidateQueries(['execution', workflowId, executionId])
+      queryClient.invalidateQueries({ queryKey: ['execution'] })
     }
   })
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle className="w-5 h-5 text-green-500" />
-      case 'failed':
-        return <XCircle className="w-5 h-5 text-red-500" />
-      case 'running':
-        return <Clock className="w-5 h-5 text-blue-500 animate-spin" />
-      case 'paused':
-        return <Pause className="w-5 h-5 text-yellow-500" />
-      case 'pending':
-        return <Clock className="w-5 h-5 text-gray-400" />
-      default:
-        return <Clock className="w-5 h-5 text-gray-400" />
+  const retryStateMutation = useMutation({
+    mutationFn: (stateName: string) => workflowApi.retryState(workflowId!, executionId!, stateName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['execution-states'] })
     }
-  }
+  })
 
-  const getStateStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-100 text-green-800 border-green-200'
-      case 'failed':
-        return 'bg-red-100 text-red-800 border-red-200'
-      case 'running':
-        return 'bg-blue-100 text-blue-800 border-blue-200'
-      case 'paused':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-      case 'pending':
-        return 'bg-gray-100 text-gray-800 border-gray-200'
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200'
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    if (!workflowId || !executionId || !autoRefresh) return
+
+    try {
+      const wsUrl = `ws://localhost:8000/api/v1/workflows/${workflowId}/executions/${executionId}/ws`
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onopen = () => {
+        console.log('WebSocket connected')
+        setWebsocket(ws)
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          // Invalidate relevant queries when we receive updates
+          if (data.type === 'execution_update') {
+            queryClient.invalidateQueries({ queryKey: ['execution'] })
+          }
+          if (data.type === 'state_update') {
+            queryClient.invalidateQueries({ queryKey: ['execution-states'] })
+          }
+          if (data.type === 'metrics_update') {
+            queryClient.invalidateQueries({ queryKey: ['execution-metrics'] })
+          }
+          if (data.type === 'event') {
+            queryClient.invalidateQueries({ queryKey: ['execution-events'] })
+          }
+          if (data.type === 'alert') {
+            queryClient.invalidateQueries({ queryKey: ['execution-alerts'] })
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected')
+        setWebsocket(null)
+      }
+
+      return () => {
+        ws.close()
+      }
+    } catch (error) {
+      console.error('Failed to create WebSocket connection:', error)
     }
-  }
+  }, [workflowId, executionId, autoRefresh, queryClient])
 
+  // Computed values
   const filteredLogs = useMemo(() => {
     if (!logs) return []
     return logs.filter(log => 
-      log.message.toLowerCase().includes(logFilter.toLowerCase()) ||
-      (log.state && log.state.toLowerCase().includes(logFilter.toLowerCase()))
+      searchTerm === '' || 
+      log.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.state?.toLowerCase().includes(searchTerm.toLowerCase())
     )
-  }, [logs, logFilter])
+  }, [logs, searchTerm])
 
-  const formatDuration = (ms: number) => {
-    const seconds = Math.floor(ms / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const hours = Math.floor(minutes / 60)
-    
-    if (hours > 0) {
-      return `${hours}h ${minutes % 60}m ${seconds % 60}s`
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds % 60}s`
-    } else {
-      return `${seconds}s`
+  const filteredEvents = useMemo(() => {
+    if (!events) return []
+    return events.filter(event => 
+      searchTerm === '' || 
+      event.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      event.state?.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  }, [events, searchTerm])
+
+  const progressPercentage = useMemo(() => {
+    if (!metrics) return 0
+    return Math.round((metrics.completedStates / metrics.totalStates) * 100)
+  }, [metrics])
+
+  // Event handlers
+  const handleRefresh = useCallback(() => {
+    refetchExecution()
+    refetchStates()
+    refetchMetrics()
+    refetchEvents()
+    refetchAlerts()
+    refetchLogs()
+  }, [refetchExecution, refetchStates, refetchMetrics, refetchEvents, refetchAlerts, refetchLogs])
+
+  const handleStateClick = useCallback((stateName: string) => {
+    setSelectedState(selectedState === stateName ? null : stateName)
+  }, [selectedState])
+
+  const handleControlAction = useCallback(async (action: string) => {
+    try {
+      switch (action) {
+        case 'pause':
+          await pauseMutation.mutateAsync()
+          break
+        case 'resume':
+          await resumeMutation.mutateAsync()
+          break
+        case 'cancel':
+          if (window.confirm('Are you sure you want to cancel this execution?')) {
+            await cancelMutation.mutateAsync()
+          }
+          break
+        case 'retry':
+          if (window.confirm('Are you sure you want to retry this execution?')) {
+            await retryMutation.mutateAsync()
+          }
+          break
+      }
+    } catch (error) {
+      console.error(`Failed to ${action} execution:`, error)
     }
-  }
+  }, [pauseMutation, resumeMutation, cancelMutation, retryMutation])
 
-  if (isLoading) {
+  const handleExportData = useCallback(async () => {
+    try {
+      const blob = await workflowApi.exportExecutionData(workflowId!, executionId!)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `execution-${executionId}-data.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to export data:', error)
+    }
+  }, [workflowId, executionId])
+
+  if (executionLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <Activity className="w-8 h-8 animate-spin text-blue-500" />
+        <span className="ml-2 text-lg">Loading execution...</span>
+      </div>
+    )
+  }
+
+  if (executionError) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <XCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Failed to load execution</h2>
+          <p className="text-gray-600 mb-4">
+            {executionError instanceof Error ? executionError.message : 'Unknown error occurred'}
+          </p>
+          <button
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            <RefreshCw className="w-4 h-4 inline mr-2" />
+            Retry
+          </button>
+        </div>
       </div>
     )
   }
 
   if (!execution) {
     return (
-      <div className="text-center py-12">
-        <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 mb-2">Execution not found</h3>
-        <Link to="/workflows" className="text-blue-600 hover:text-blue-800">
-          Return to workflows
-        </Link>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <AlertTriangle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Execution not found</h2>
+          <p className="text-gray-600">The requested execution could not be found.</p>
+        </div>
       </div>
     )
   }
@@ -260,639 +409,741 @@ export default function ExecutionMonitor() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b shadow-sm">
+      <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div className="flex items-center">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center space-x-4">
               <Link
-                to="/workflows"
-                className="mr-4 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                to={`/workflows/${workflowId}`}
+                className="flex items-center text-gray-600 hover:text-gray-900"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-5 h-5 mr-2" />
+                Back to Workflow
               </Link>
+              <div className="h-6 border-l border-gray-300" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-                  {getStatusIcon(execution.status)}
-                  <span className="ml-3">Execution Monitor</span>
-                  {wsConnection && (
-                    <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      <span className="w-2 h-2 bg-green-400 rounded-full mr-1 animate-pulse"></span>
-                      Live
-                    </span>
-                  )}
+                <h1 className="text-xl font-semibold text-gray-900">
+                  Execution Monitor
                 </h1>
-                <p className="text-gray-600 mt-1">
-                  Workflow: {execution.workflow_id} • Execution: {execution.execution_id}
+                <p className="text-sm text-gray-600">
+                  {execution.workflow_id} • {executionId}
                 </p>
               </div>
             </div>
-            
+
             <div className="flex items-center space-x-3">
-              {/* Execution Controls */}
-              {execution.status === 'running' && (
-                <>
+              {/* Auto-refresh toggle */}
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-600">Auto-refresh</span>
+              </label>
+
+              {/* WebSocket status indicator */}
+              <div className="flex items-center space-x-2">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    websocket ? 'bg-green-500' : 'bg-red-500'
+                  }`}
+                />
+                <span className="text-xs text-gray-500">
+                  {websocket ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+
+              {/* Control buttons */}
+              <div className="flex items-center space-x-2">
+                {execution.status === 'running' && (
                   <button
-                    onClick={() => pauseMutation.mutate()}
-                    disabled={pauseMutation.isLoading}
-                    className="px-4 py-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-700 rounded-lg disabled:opacity-50 flex items-center"
+                    onClick={() => handleControlAction('pause')}
+                    disabled={pauseMutation.isPending}
+                    className="px-3 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 disabled:opacity-50"
                   >
-                    <Pause className="w-4 h-4 mr-2" />
-                    {pauseMutation.isLoading ? 'Pausing...' : 'Pause'}
+                    <Pause className="w-4 h-4" />
                   </button>
+                )}
+                
+                {execution.status === 'paused' && (
                   <button
-                    onClick={() => cancelMutation.mutate()}
-                    disabled={cancelMutation.isLoading}
-                    className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg disabled:opacity-50 flex items-center"
+                    onClick={() => handleControlAction('resume')}
+                    disabled={resumeMutation.isPending}
+                    className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
                   >
-                    <Square className="w-4 h-4 mr-2" />
-                    {cancelMutation.isLoading ? 'Cancelling...' : 'Cancel'}
+                    <Play className="w-4 h-4" />
                   </button>
-                </>
-              )}
-              
-              {execution.status === 'paused' && (
+                )}
+
+                {['running', 'paused'].includes(execution.status) && (
+                  <button
+                    onClick={() => handleControlAction('cancel')}
+                    disabled={cancelMutation.isPending}
+                    className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
+                  >
+                    <Square className="w-4 h-4" />
+                  </button>
+                )}
+
+                {['failed', 'cancelled'].includes(execution.status) && (
+                  <button
+                    onClick={() => handleControlAction('retry')}
+                    disabled={retryMutation.isPending}
+                    className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                )}
+
                 <button
-                  onClick={() => resumeMutation.mutate()}
-                  disabled={resumeMutation.isLoading}
-                  className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg disabled:opacity-50 flex items-center"
+                  onClick={handleRefresh}
+                  className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600"
                 >
-                  <Play className="w-4 h-4 mr-2" />
-                  {resumeMutation.isLoading ? 'Resuming...' : 'Resume'}
+                  <RefreshCw className="w-4 h-4" />
                 </button>
-              )}
-              
-              {(execution.status === 'failed' || execution.status === 'completed') && (
+
                 <button
-                  onClick={() => retryMutation.mutate()}
-                  disabled={retryMutation.isLoading}
-                  className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg disabled:opacity-50 flex items-center"
+                  onClick={handleExportData}
+                  className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600"
                 >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  {retryMutation.isLoading ? 'Retrying...' : 'Retry'}
+                  <Download className="w-4 h-4" />
                 </button>
-              )}
-              
-              <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center">
-                <Download className="w-4 h-4 mr-2" />
-                Export
-              </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow-sm border p-6">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <Activity className="w-8 h-8 text-blue-600" />
+      {/* Status bar */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-6">
+              <div className="flex items-center space-x-2">
+                {getStatusIcon(execution.status)}
+                <span className="font-medium capitalize">{execution.status}</span>
               </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">Status</p>
-                <p className="text-2xl font-semibold text-gray-900 capitalize">{execution.status}</p>
+              
+              {metrics && (
+                <>
+                  <div className="text-sm text-gray-600">
+                    Progress: {progressPercentage}% ({metrics.completedStates}/{metrics.totalStates} states)
+                  </div>
+                  
+                  <div className="text-sm text-gray-600">
+                    Duration: {formatDuration(metrics.totalExecutionTime)}
+                  </div>
+                  
+                  <div className="text-sm text-gray-600">
+                    Active: {metrics.activeStates}
+                  </div>
+                  
+                  {metrics.failedStates > 0 && (
+                    <div className="text-sm text-red-600">
+                      Failed: {metrics.failedStates}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            {metrics && (
+              <div className="w-48">
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${progressPercentage}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Alerts */}
+          {alerts && alerts.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {alerts.slice(0, 3).map((alert) => (
+                <div
+                  key={alert.id}
+                  className={`p-3 rounded-lg ${
+                    alert.type === 'error'
+                      ? 'bg-red-50 border border-red-200 text-red-800'
+                      : alert.type === 'warning'
+                      ? 'bg-yellow-50 border border-yellow-200 text-yellow-800'
+                      : 'bg-blue-50 border border-blue-200 text-blue-800'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    {alert.type === 'error' ? (
+                      <XCircle className="w-4 h-4" />
+                    ) : alert.type === 'warning' ? (
+                      <AlertTriangle className="w-4 h-4" />
+                    ) : (
+                      <Info className="w-4 h-4" />
+                    )}
+                    <span className="font-medium">{alert.message}</span>
+                    <span className="text-xs opacity-75">
+                      {formatTimestamp(alert.timestamp)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Tab navigation */}
+        <div className="mb-6">
+          <nav className="flex space-x-8">
+            {[
+              { key: 'overview', label: 'Overview', icon: Eye },
+              { key: 'states', label: 'States', icon: Layers },
+              { key: 'logs', label: 'Logs', icon: FileText },
+              { key: 'events', label: 'Events', icon: Activity },
+              { key: 'metrics', label: 'Metrics', icon: BarChart3 },
+            ].map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key as any)}
+                className={`flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-lg ${
+                  activeTab === key
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        {/* Tab content */}
+        <div className="bg-white rounded-lg shadow">
+          {activeTab === 'overview' && (
+            <OverviewTab
+              execution={execution}
+              metrics={metrics}
+              states={states}
+              alerts={alerts}
+              onStateSelect={handleStateClick}
+            />
+          )}
+
+          {activeTab === 'states' && (
+            <StatesTab
+              states={states}
+              selectedState={selectedState}
+              onStateSelect={handleStateClick}
+              onRetryState={(stateName) => retryStateMutation.mutate(stateName)}
+              isRetrying={retryStateMutation.isPending}
+            />
+          )}
+
+          {activeTab === 'logs' && (
+            <LogsTab
+              logs={filteredLogs}
+              filter={logFilter}
+              onFilterChange={setLogFilter}
+              searchTerm={searchTerm}
+              onSearchChange={setSearchTerm}
+            />
+          )}
+
+          {activeTab === 'events' && (
+            <EventsTab
+              events={filteredEvents}
+              searchTerm={searchTerm}
+              onSearchChange={setSearchTerm}
+            />
+          )}
+
+          {activeTab === 'metrics' && (
+            <MetricsTab
+              metrics={metrics}
+              states={states}
+              execution={execution}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Sub-components
+function OverviewTab({ execution, metrics, states, alerts, onStateSelect }) {
+  return (
+    <div className="p-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Execution Summary */}
+        <div>
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Execution Summary</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Status:</span>
+              <div className="flex items-center space-x-2">
+                {getStatusIcon(execution.status)}
+                <span className="capitalize">{execution.status}</span>
+              </div>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Started:</span>
+              <span>{new Date(execution.started_at).toLocaleString()}</span>
+            </div>
+            {execution.completed_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Completed:</span>
+                <span>{new Date(execution.completed_at).toLocaleString()}</span>
+              </div>
+            )}
+            {metrics && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Duration:</span>
+                <span>{formatDuration(metrics.totalExecutionTime)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Metrics Overview */}
+        {metrics && (
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Metrics</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="text-2xl font-bold text-green-600">
+                  {metrics.completedStates}
+                </div>
+                <div className="text-sm text-gray-600">Completed</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="text-2xl font-bold text-red-600">
+                  {metrics.failedStates}
+                </div>
+                <div className="text-sm text-gray-600">Failed</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="text-2xl font-bold text-blue-600">
+                  {metrics.activeStates}
+                </div>
+                <div className="text-sm text-gray-600">Active</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="text-2xl font-bold text-gray-600">
+                  {formatDuration(metrics.avgStateTime)}
+                </div>
+                <div className="text-sm text-gray-600">Avg Time</div>
               </div>
             </div>
           </div>
+        )}
+      </div>
 
-          <div className="bg-white rounded-lg shadow-sm border p-6">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <Timer className="w-8 h-8 text-green-600" />
+      {/* States Overview */}
+      <div className="mt-8">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">States</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {states.map((state) => (
+            <div
+              key={state.name}
+              onClick={() => onStateSelect(state.name)}
+              className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${getStateStatusColor(
+                state.status
+              )} hover:shadow-md`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">{state.name}</span>
+                {getStatusIcon(state.status)}
               </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">Duration</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {metrics?.totalExecutionTime ? formatDuration(metrics.totalExecutionTime) : '--'}
-                </p>
+              <div className="text-sm text-gray-600">
+                {state.duration && (
+                  <span>Duration: {formatDuration(state.duration)}</span>
+                )}
+                {state.attempts > 1 && (
+                  <span className="ml-2">({state.attempts} attempts)</span>
+                )}
               </div>
             </div>
-          </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
-          <div className="bg-white rounded-lg shadow-sm border p-6">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <CheckCircle className="w-8 h-8 text-emerald-600" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">Completed</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {metrics?.completedStates || 0}/{metrics?.totalStates || 0}
-                </p>
+function StatesTab({ states, selectedState, onStateSelect, onRetryState, isRetrying }) {
+  return (
+    <div className="p-6">
+      <div className="space-y-4">
+        {states.map((state) => (
+          <div
+            key={state.name}
+            className={`border rounded-lg transition-all ${
+              selectedState === state.name ? 'ring-2 ring-blue-500' : ''
+            } ${getStateStatusColor(state.status)}`}
+          >
+            <div
+              onClick={() => onStateSelect(state.name)}
+              className="p-4 cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  {getStatusIcon(state.status)}
+                  <span className="font-medium">{state.name}</span>
+                  {state.attempts > 1 && (
+                    <span className="text-sm text-gray-500">
+                      (Attempt {state.attempts})
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center space-x-4">
+                  {state.duration && (
+                    <span className="text-sm text-gray-600">
+                      {formatDuration(state.duration)}
+                    </span>
+                  )}
+                  {state.status === 'failed' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onRetryState(state.name)
+                      }}
+                      disabled={isRetrying}
+                      className="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="bg-white rounded-lg shadow-sm border p-6">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <TrendingUp className="w-8 h-8 text-purple-600" />
+            {selectedState === state.name && (
+              <div className="border-t bg-white p-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <h4 className="font-medium mb-2">Details</h4>
+                    <div className="space-y-1 text-sm">
+                      <div>Status: <span className="capitalize">{state.status}</span></div>
+                      {state.startTime && (
+                        <div>Started: {new Date(state.startTime).toLocaleString()}</div>
+                      )}
+                      {state.endTime && (
+                        <div>Ended: {new Date(state.endTime).toLocaleString()}</div>
+                      )}
+                      {state.duration && (
+                        <div>Duration: {formatDuration(state.duration)}</div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {state.dependencies.length > 0 && (
+                    <div>
+                      <h4 className="font-medium mb-2">Dependencies</h4>
+                      <div className="flex flex-wrap gap-1">
+                        {state.dependencies.map((dep) => (
+                          <span
+                            key={dep}
+                            className="px-2 py-1 text-xs bg-gray-100 rounded"
+                          >
+                            {dep}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {state.error && (
+                  <div className="mt-4">
+                    <h4 className="font-medium mb-2 text-red-600">Error</h4>
+                    <pre className="bg-red-50 p-3 rounded text-sm text-red-800 overflow-x-auto">
+                      {state.error}
+                    </pre>
+                  </div>
+                )}
+
+                {state.data && (
+                  <div className="mt-4">
+                    <h4 className="font-medium mb-2">Data</h4>
+                    <pre className="bg-gray-50 p-3 rounded text-sm overflow-x-auto">
+                      {JSON.stringify(state.data, null, 2)}
+                    </pre>
+                  </div>
+                )}
               </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">Throughput</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {metrics?.throughput?.toFixed(2) || '0.00'} states/min
-                </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function LogsTab({ logs, filter, onFilterChange, searchTerm, onSearchChange }) {
+  const getLevelColor = (level: string) => {
+    switch (level) {
+      case 'error': return 'text-red-600'
+      case 'warning': return 'text-yellow-600'
+      case 'info': return 'text-blue-600'
+      case 'debug': return 'text-gray-600'
+      default: return 'text-gray-600'
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-4 flex items-center space-x-4">
+        <div className="flex items-center space-x-2">
+          <Filter className="w-4 h-4 text-gray-500" />
+          <select
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value as any)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="all">All Levels</option>
+            <option value="error">Error</option>
+            <option value="warning">Warning</option>
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+          </select>
+        </div>
+        
+        <div className="flex-1 max-w-md">
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search logs..."
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto">
+        <div className="space-y-1 font-mono text-sm">
+          {logs.map((log) => (
+            <div key={log.id} className="flex space-x-4">
+              <span className="text-gray-400 whitespace-nowrap">
+                {formatTimestamp(log.timestamp)}
+              </span>
+              <span className={`uppercase font-medium ${getLevelColor(log.level)}`}>
+                {log.level}
+              </span>
+              {log.state && (
+                <span className="text-blue-400">[{log.state}]</span>
+              )}
+              <span className="text-gray-100 flex-1">{log.message}</span>
+            </div>
+          ))}
+          {logs.length === 0 && (
+            <div className="text-gray-400 text-center py-8">
+              No logs found matching the current filter
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EventsTab({ events, searchTerm, onSearchChange }) {
+  const getEventTypeColor = (type: string) => {
+    switch (type) {
+      case 'state_failed': return 'text-red-600'
+      case 'alert': return 'text-orange-600'
+      case 'resource_warning': return 'text-yellow-600'
+      case 'state_completed': return 'text-green-600'
+      case 'state_started': return 'text-blue-600'
+      default: return 'text-gray-600'
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-4">
+        <div className="relative max-w-md">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search events..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {events.map((event) => (
+          <div
+            key={event.id}
+            className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-3">
+                <span className={`font-medium ${getEventTypeColor(event.type)}`}>
+                  {event.type.replace(/_/g, ' ').toUpperCase()}
+                </span>
+                {event.state && (
+                  <span className="text-sm text-gray-500">[{event.state}]</span>
+                )}
               </div>
+              <span className="text-xs text-gray-500">
+                {formatTimestamp(event.timestamp)}
+              </span>
+            </div>
+            <p className="text-gray-900">{event.message}</p>
+            {event.metadata && Object.keys(event.metadata).length > 0 && (
+              <details className="mt-2">
+                <summary className="text-sm text-gray-500 cursor-pointer">
+                  View metadata
+                </summary>
+                <pre className="mt-2 text-xs bg-gray-100 p-2 rounded overflow-x-auto">
+                  {JSON.stringify(event.metadata, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        ))}
+        {events.length === 0 && (
+          <div className="text-gray-500 text-center py-8">
+            No events found matching the current search
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function MetricsTab({ metrics, states, execution }) {
+  if (!metrics) {
+    return (
+      <div className="p-6 text-center text-gray-500">
+        No metrics available
+      </div>
+    )
+  }
+
+  const resourceData = [
+    { name: 'CPU', value: metrics.resourceUtilization.cpu, color: 'bg-blue-500' },
+    { name: 'Memory', value: metrics.resourceUtilization.memory, color: 'bg-green-500' },
+    { name: 'Network', value: metrics.resourceUtilization.network, color: 'bg-purple-500' },
+  ]
+
+  return (
+    <div className="p-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* Key Metrics */}
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h3 className="font-medium text-gray-900 mb-3">Execution Stats</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Total States:</span>
+              <span className="font-medium">{metrics.totalStates}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Completed:</span>
+              <span className="font-medium text-green-600">{metrics.completedStates}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Failed:</span>
+              <span className="font-medium text-red-600">{metrics.failedStates}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Active:</span>
+              <span className="font-medium text-blue-600">{metrics.activeStates}</span>
             </div>
           </div>
         </div>
 
-        {/* Progress Bar */}
-        {metrics && (
-          <div className="bg-white rounded-lg shadow-sm border p-6 mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Execution Progress</h3>
-              <span className="text-sm text-gray-600">
-                {Math.round((metrics.completedStates / metrics.totalStates) * 100)}% Complete
-              </span>
+        {/* Performance Metrics */}
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h3 className="font-medium text-gray-900 mb-3">Performance</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Total Time:</span>
+              <span className="font-medium">{formatDuration(metrics.totalExecutionTime)}</span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-3">
-              <div 
-                className="bg-blue-600 h-3 rounded-full transition-all duration-300"
-                style={{ width: `${(metrics.completedStates / metrics.totalStates) * 100}%` }}
-              ></div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Avg State Time:</span>
+              <span className="font-medium">{formatDuration(metrics.avgStateTime)}</span>
             </div>
-            <div className="flex justify-between text-sm text-gray-600 mt-2">
-              <span>{metrics.completedStates} completed</span>
-              <span>{metrics.failedStates} failed</span>
-              <span>{metrics.activeStates} running</span>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Throughput:</span>
+              <span className="font-medium">{metrics.throughput.toFixed(2)} states/sec</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Error Rate:</span>
+              <span className="font-medium text-red-600">{(metrics.errorRate * 100).toFixed(1)}%</span>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* Tab Navigation */}
-        <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-          <div className="border-b border-gray-200">
-            <nav className="flex">
-              {[
-                { id: 'overview', label: 'Overview', icon: Eye },
-                { id: 'states', label: 'States', icon: Layers },
-                { id: 'timeline', label: 'Timeline', icon: GitBranch },
-                { id: 'logs', label: 'Logs', icon: FileText },
-                { id: 'metrics', label: 'Metrics', icon: BarChart3 },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
-                  className={`flex items-center px-6 py-4 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === tab.id
-                      ? 'border-blue-500 text-blue-600 bg-blue-50'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-                  }`}
+        {/* Resource Utilization */}
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h3 className="font-medium text-gray-900 mb-3">Resource Usage</h3>
+          <div className="space-y-3">
+            {resourceData.map((resource) => (
+              <div key={resource.name}>
+                <div className="flex justify-between mb-1">
+                  <span className="text-gray-600">{resource.name}:</span>
+                  <span className="font-medium">{resource.value.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full ${resource.color}`}
+                    style={{ width: `${resource.value}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* State Performance Chart */}
+      <div className="mt-8">
+        <h3 className="font-medium text-gray-900 mb-4">State Performance</h3>
+        <div className="bg-gray-50 p-4 rounded-lg overflow-x-auto">
+          <div className="min-w-full">
+            <div className="flex items-end space-x-2 h-32">
+              {states.map((state, index) => (
+                <div
+                  key={state.name}
+                  className="flex-1 flex flex-col items-center"
+                  title={`${state.name}: ${formatDuration(state.duration || 0)}`}
                 >
-                  <tab.icon className="w-4 h-4 mr-2" />
-                  {tab.label}
-                </button>
+                  <div
+                    className={`w-full min-w-8 rounded-t ${
+                      state.status === 'completed' ? 'bg-green-500' :
+                      state.status === 'failed' ? 'bg-red-500' :
+                      state.status === 'running' ? 'bg-blue-500' :
+                      'bg-gray-300'
+                    }`}
+                    style={{
+                      height: `${Math.max(
+                        (state.duration || 0) / Math.max(...states.map(s => s.duration || 0)) * 100,
+                        5
+                      )}%`
+                    }}
+                  />
+                  <span className="text-xs text-gray-600 mt-1 truncate max-w-16">
+                    {state.name}
+                  </span>
+                </div>
               ))}
-            </nav>
-          </div>
-
-          <div className="p-6">
-            {/* Overview Tab */}
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                {/* Execution Summary */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Execution Summary</h3>
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <dl className="grid grid-cols-2 gap-4">
-                      <div>
-                        <dt className="text-sm font-medium text-gray-600">Started At</dt>
-                        <dd className="text-sm text-gray-900">{execution.started_at ? new Date(execution.started_at).toLocaleString() : '--'}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-sm font-medium text-gray-600">Current State</dt>
-                        <dd className="text-sm text-gray-900">{execution.current_state || '--'}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-sm font-medium text-gray-600">Error Rate</dt>
-                        <dd className="text-sm text-gray-900">{metrics?.errorRate?.toFixed(1) || '0.0'}%</dd>
-                      </div>
-                      <div>
-                        <dt className="text-sm font-medium text-gray-600">Avg State Time</dt>
-                        <dd className="text-sm text-gray-900">{metrics?.avgStateTime ? formatDuration(metrics.avgStateTime) : '--'}</dd>
-                      </div>
-                    </dl>
-                  </div>
-                </div>
-
-                {/* Resource Utilization */}
-                {metrics?.resourceUtilization && (
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Resource Utilization</h3>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="flex items-center">
-                          <Cpu className="w-5 h-5 text-blue-600 mr-2" />
-                          <span className="font-medium">CPU</span>
-                        </div>
-                        <div className="mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span>Usage</span>
-                            <span>{metrics.resourceUtilization.cpu.toFixed(1)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                            <div 
-                              className="bg-blue-600 h-2 rounded-full"
-                              style={{ width: `${metrics.resourceUtilization.cpu}%` }}
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="flex items-center">
-                          <MemoryStick className="w-5 h-5 text-green-600 mr-2" />
-                          <span className="font-medium">Memory</span>
-                        </div>
-                        <div className="mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span>Usage</span>
-                            <span>{metrics.resourceUtilization.memory.toFixed(1)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                            <div 
-                              className="bg-green-600 h-2 rounded-full"
-                              style={{ width: `${metrics.resourceUtilization.memory}%` }}
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="flex items-center">
-                          <Network className="w-5 h-5 text-purple-600 mr-2" />
-                          <span className="font-medium">Network</span>
-                        </div>
-                        <div className="mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span>I/O</span>
-                            <span>{metrics.resourceUtilization.network.toFixed(1)} MB/s</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                            <div 
-                              className="bg-purple-600 h-2 rounded-full"
-                              style={{ width: `${Math.min(metrics.resourceUtilization.network * 10, 100)}%` }}
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Recent Events */}
-                {events && events.length > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Events</h3>
-                    <div className="space-y-2">
-                      {events.slice(0, 5).map((event) => (
-                        <div key={event.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                          <div className="flex items-center">
-                            <span className={`w-2 h-2 rounded-full mr-3 ${
-                              event.level === 'error' ? 'bg-red-500' :
-                              event.level === 'warning' ? 'bg-yellow-500' :
-                              event.level === 'success' ? 'bg-green-500' : 'bg-blue-500'
-                            }`}></span>
-                            <span className="text-sm text-gray-900">{event.message}</span>
-                            {event.state && (
-                              <span className="ml-2 px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded">
-                                {event.state}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-xs text-gray-500">
-                            {new Date(event.timestamp).toLocaleTimeString()}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* States Tab */}
-            {activeTab === 'states' && states && (
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Workflow States</h3>
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {states.map((state) => (
-                    <div 
-                      key={state.name} 
-                      className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                        selectedState === state.name ? 'ring-2 ring-blue-500 border-blue-300' : 'hover:shadow-md'
-                      } ${getStateStatusColor(state.status)}`}
-                      onClick={() => setSelectedState(selectedState === state.name ? null : state.name)}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-medium">{state.name}</h4>
-                        {getStatusIcon(state.status)}
-                      </div>
-                      
-                      <div className="text-sm space-y-1">
-                        <div className="flex justify-between">
-                          <span>Duration:</span>
-                          <span>{state.duration ? formatDuration(state.duration) : '--'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Attempts:</span>
-                          <span>{state.attempts}</span>
-                        </div>
-                        {state.error && (
-                          <div className="text-red-600 text-xs mt-2 p-2 bg-red-50 rounded">
-                            {state.error}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Expanded details */}
-                      {selectedState === state.name && (
-                        <div className="mt-4 pt-4 border-t space-y-3">
-                          {state.dependencies.length > 0 && (
-                            <div>
-                              <span className="text-xs font-medium text-gray-600">Dependencies:</span>
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {state.dependencies.map((dep) => (
-                                  <span key={dep} className="text-xs px-2 py-1 bg-gray-200 rounded">
-                                    {dep}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          
-                          {state.transitions.length > 0 && (
-                            <div>
-                              <span className="text-xs font-medium text-gray-600">Transitions:</span>
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {state.transitions.map((transition) => (
-                                  <span key={transition} className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
-                                    {transition}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {state.metrics && (
-                            <div>
-                              <span className="text-xs font-medium text-gray-600">Metrics:</span>
-                              <div className="grid grid-cols-2 gap-2 mt-1 text-xs">
-                                <div>CPU: {state.metrics.cpuUsage.toFixed(1)}%</div>
-                                <div>Memory: {state.metrics.memoryUsage.toFixed(1)}MB</div>
-                                <div>Network: {state.metrics.networkIO.toFixed(1)}KB/s</div>
-                                <div>Retries: {state.metrics.retryCount}</div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Timeline Tab */}
-            {activeTab === 'timeline' && states && (
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Execution Timeline</h3>
-                <div className="relative">
-                  {/* Timeline line */}
-                  <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-gray-200"></div>
-                  
-                  <div className="space-y-6">
-                    {states
-                      .filter(state => state.startTime)
-                      .sort((a, b) => new Date(a.startTime!).getTime() - new Date(b.startTime!).getTime())
-                      .map((state, index) => (
-                        <div key={state.name} className="relative flex items-start">
-                          {/* Timeline dot */}
-                          <div className={`relative z-10 flex items-center justify-center w-6 h-6 rounded-full border-2 ${
-                            state.status === 'completed' ? 'bg-green-100 border-green-500' :
-                            state.status === 'failed' ? 'bg-red-100 border-red-500' :
-                            state.status === 'running' ? 'bg-blue-100 border-blue-500' :
-                            'bg-gray-100 border-gray-300'
-                          }`}>
-                            {state.status === 'completed' ? (
-                              <CheckCircle className="w-3 h-3 text-green-600" />
-                            ) : state.status === 'failed' ? (
-                              <XCircle className="w-3 h-3 text-red-600" />
-                            ) : state.status === 'running' ? (
-                              <Clock className="w-3 h-3 text-blue-600" />
-                            ) : (
-                              <Clock className="w-3 h-3 text-gray-400" />
-                            )}
-                          </div>
-
-                          {/* Timeline content */}
-                          <div className="ml-6 min-w-0 flex-1">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-sm font-medium text-gray-900">{state.name}</h4>
-                              <time className="text-xs text-gray-500">
-                                {new Date(state.startTime!).toLocaleTimeString()}
-                              </time>
-                            </div>
-                            <div className="mt-1 text-sm text-gray-600">
-                              Duration: {state.duration ? formatDuration(state.duration) : 'In progress...'}
-                              {state.attempts > 1 && (
-                                <span className="ml-2 text-yellow-600">• {state.attempts} attempts</span>
-                              )}
-                            </div>
-                            {state.error && (
-                              <div className="mt-2 text-sm text-red-600 bg-red-50 p-2 rounded">
-                                {state.error}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Logs Tab */}
-            {activeTab === 'logs' && (
-              <div>
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Execution Logs</h3>
-                  <div className="flex space-x-3">
-                    <div className="relative">
-                      <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                      <input
-                        type="text"
-                        value={logFilter}
-                        onChange={(e) => setLogFilter(e.target.value)}
-                        placeholder="Filter logs..."
-                        className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                      />
-                    </div>
-                    <select
-                      value={logLevel}
-                      onChange={(e) => setLogLevel(e.target.value)}
-                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                    >
-                      <option value="all">All Levels</option>
-                      <option value="debug">Debug</option>
-                      <option value="info">Info</option>
-                      <option value="warning">Warning</option>
-                      <option value="error">Error</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-sm">
-                  {filteredLogs.length > 0 ? (
-                    filteredLogs.map((log) => (
-                      <div key={log.id} className="flex items-start space-x-3 py-1 hover:bg-gray-800 px-2 rounded">
-                        <span className="text-gray-400 text-xs whitespace-nowrap">
-                          {new Date(log.timestamp).toLocaleTimeString()}
-                        </span>
-                        <span className={`text-xs uppercase font-medium w-16 ${
-                          log.level === 'error' ? 'text-red-400' :
-                          log.level === 'warning' ? 'text-yellow-400' :
-                          log.level === 'info' ? 'text-blue-400' :
-                          'text-gray-400'
-                        }`}>
-                          {log.level}
-                        </span>
-                        {log.state && (
-                          <span className="text-purple-400 text-xs">[{log.state}]</span>
-                        )}
-                        <span className="text-gray-100 flex-1">{log.message}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-gray-400 text-center py-8">
-                      No logs found matching your filter
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Metrics Tab */}
-            {activeTab === 'metrics' && metrics && (
-              <div className="space-y-6">
-                <h3 className="text-lg font-semibold text-gray-900">Performance Metrics</h3>
-                
-                {/* Metrics Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <Timer className="w-8 h-8 text-blue-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-blue-600">Total Execution Time</p>
-                        <p className="text-2xl font-bold text-blue-900">
-                          {formatDuration(metrics.totalExecutionTime)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <Target className="w-8 h-8 text-green-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-green-600">Success Rate</p>
-                        <p className="text-2xl font-bold text-green-900">
-                          {((metrics.completedStates / (metrics.completedStates + metrics.failedStates)) * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <Zap className="w-8 h-8 text-purple-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-purple-600">Throughput</p>
-                        <p className="text-2xl font-bold text-purple-900">
-                          {metrics.throughput.toFixed(2)} states/min
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <Clock className="w-8 h-8 text-yellow-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-yellow-600">Avg State Time</p>
-                        <p className="text-2xl font-bold text-yellow-900">
-                          {formatDuration(metrics.avgStateTime)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <AlertTriangle className="w-8 h-8 text-red-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-red-600">Error Rate</p>
-                        <p className="text-2xl font-bold text-red-900">
-                          {metrics.errorRate.toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-lg p-6">
-                    <div className="flex items-center">
-                      <Activity className="w-8 h-8 text-indigo-600" />
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-indigo-600">Active States</p>
-                        <p className="text-2xl font-bold text-indigo-900">
-                          {metrics.activeStates}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Detailed Resource Usage */}
-                <div className="bg-gray-50 rounded-lg p-6">
-                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Resource Usage Details</h4>
-                  <div className="space-y-4">
-                    {states && states.filter(s => s.metrics).map((state) => (
-                      <div key={state.name} className="bg-white rounded-lg p-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <h5 className="font-medium text-gray-900">{state.name}</h5>
-                          <span className={`px-2 py-1 text-xs rounded ${getStateStatusColor(state.status)}`}>
-                            {state.status}
-                          </span>
-                        </div>
-                        {state.metrics && (
-                          <div className="grid grid-cols-4 gap-4 text-sm">
-                            <div>
-                              <span className="text-gray-600">CPU:</span>
-                              <span className="ml-1 font-medium">{state.metrics.cpuUsage.toFixed(1)}%</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-600">Memory:</span>
-                              <span className="ml-1 font-medium">{state.metrics.memoryUsage.toFixed(1)}MB</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-600">Network:</span>
-                              <span className="ml-1 font-medium">{state.metrics.networkIO.toFixed(1)}KB/s</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-600">Duration:</span>
-                              <span className="ml-1 font-medium">{formatDuration(state.metrics.executionTime)}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
