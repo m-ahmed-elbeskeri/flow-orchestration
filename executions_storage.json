@@ -1,1 +1,11 @@
-{}
+{
+  "7276dca5-7253-409b-a5c0-15fea0b98154": {
+    "execution_id": "7276dca5-7253-409b-a5c0-15fea0b98154",
+    "workflow_id": "38e45ed6-ae91-4451-899b-f9b7e2489274",
+    "status": "completed",
+    "started_at": "2025-06-11T19:11:43.321277Z",
+    "parameters": {},
+    "priority": 1,
+    "completed_at": "2025-06-11T19:11:45.375589Z"
+  }
+}

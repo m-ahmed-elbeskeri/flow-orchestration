@@ -191,7 +191,12 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173", # Vite default port
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -363,80 +368,76 @@ async def logout():
 
 # Workflow management endpoints
 @app.get("/api/v1/workflows")
+@app.get("/api/v1/workflows")
 async def list_workflows(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
     search: Optional[str] = None,
-    author: Optional[str] = None,
-    created_after: Optional[str] = None,
-    created_before: Optional[str] = None
-):
-    """List workflows with enhanced debugging and filtering."""
-    logger.info(f"Listing workflows: limit={limit}, offset={offset}, status={status}, search={search}")
-    logger.info(f"Total workflows in memory: {len(app_state['workflows'])}")
-    
-    workflows = []
-    
-    # Convert stored workflows to response format
-    for workflow_id, workflow_data in app_state["workflows"].items():
-        try:
-            # Ensure required fields are present
+    author: Optional[str] = None
+) -> dict:
+    """List all workflows with pagination and filtering."""
+    try:
+        workflows = []
+        
+        for workflow_id, workflow_data in app_state["workflows"].items():
             workflow_response_data = {
-                "workflow_id": workflow_data.get("workflow_id", workflow_id),
-                "name": workflow_data.get("name", "Unknown"),
+                "workflow_id": workflow_id,
+                "name": workflow_data["name"],
                 "description": workflow_data.get("description", ""),
                 "status": workflow_data.get("status", "created"),
-                "created_at": workflow_data.get("created_at", datetime.utcnow().isoformat() + "Z"),
-                "updated_at": workflow_data.get("updated_at", datetime.utcnow().isoformat() + "Z"),
+                "created_at": workflow_data.get("created_at", ""),
+                "updated_at": workflow_data.get("updated_at", ""),
                 "states_count": workflow_data.get("states_count", 0),
-                "last_execution": workflow_data.get("last_execution")
+                "last_execution": workflow_data.get("last_execution"),
+                # Add missing fields that frontend expects
+                "success_rate": workflow_data.get("success_rate", 0.0),
+                "executions_today": workflow_data.get("executions_today", 0),
+                "avg_duration": workflow_data.get("avg_duration", 0),
+                "author": workflow_data.get("author", "Unknown"),
+                "is_scheduled": workflow_data.get("is_scheduled", False),
+                "schedule_info": workflow_data.get("schedule_info", None)
             }
-            
-            workflows.append(WorkflowResponse(**workflow_response_data))
-            logger.debug(f"Added workflow {workflow_id} to response")
-            
-        except Exception as e:
-            logger.error(f"Error converting workflow {workflow_id}: {str(e)}")
-            logger.error(f"Workflow data: {workflow_data}")
-    
-    logger.info(f"Converted {len(workflows)} workflows to response format")
-    
-    # Apply filters
-    if status:
-        before_filter = len(workflows)
-        workflows = [w for w in workflows if w.status == status]
-        logger.info(f"Status filter '{status}': {before_filter} -> {len(workflows)} workflows")
-    
-    if search:
-        before_filter = len(workflows)
-        search_lower = search.lower()
-        workflows = [w for w in workflows if 
-                    search_lower in w.name.lower() or 
-                    search_lower in w.description.lower()]
-        logger.info(f"Search filter '{search}': {before_filter} -> {len(workflows)} workflows")
-    
-    if author:
-        before_filter = len(workflows)
-        workflows = [w for w in workflows if author.lower() in w.description.lower()]
-        logger.info(f"Author filter '{author}': {before_filter} -> {len(workflows)} workflows")
-    
-    # Apply pagination
-    total = len(workflows)
-    workflows = workflows[offset:offset + limit]
-    
-    logger.info(f"Pagination: returning {len(workflows)} of {total} workflows")
-    
-    response = {
-        "items": workflows,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "has_more": offset + len(workflows) < total
-    }
-    
-    logger.info(f"Returning response with {len(response['items'])} workflows")
-    return response
+            workflows.append(workflow_response_data)
+        
+        # Apply filters (same as before)
+        if status:
+            workflows = [w for w in workflows if w["status"] == status]
+        
+        if search:
+            search_lower = search.lower()
+            workflows = [w for w in workflows if 
+                       search_lower in w["name"].lower() or 
+                       search_lower in w["description"].lower()]
+        
+        if author:
+            workflows = [w for w in workflows if author.lower() in w["description"].lower()]
+        
+        # Apply pagination
+        total = len(workflows)
+        workflows = workflows[offset:offset + limit]
+        
+        # Fix: Return 'workflows' instead of 'items'
+        response = {
+            "workflows": workflows,  # ← Changed from 'items' to 'workflows'
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(workflows) < total
+        }
+        
+        logger.info(f"Returning {len(workflows)} workflows out of {total}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in list_workflows: {e}")
+        return {
+            "workflows": [],  # ← Changed from 'items' to 'workflows'
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "has_more": False
+        }
 
 @app.get("/api/v1/workflows/{workflow_id}")
 async def get_workflow(workflow_id: str):

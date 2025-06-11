@@ -1,13 +1,14 @@
 {
-  "ebf76b9f-81f4-4fbd-a239-f083a91c1a00": {
-    "workflow_id": "ebf76b9f-81f4-4fbd-a239-f083a91c1a00",
-    "name": "Basic Email Notification",
+  "38e45ed6-ae91-4451-899b-f9b7e2489274": {
+    "workflow_id": "38e45ed6-ae91-4451-899b-f9b7e2489274",
+    "name": "Blank Workflow",
     "description": "",
-    "yaml_content": "name: email_notification_workflow\nversion: \"1.0.0\"\ndescription: \"Send email notifications based on triggers\"\nauthor: \"Workflow Designer\"\n\nconfig:\n  timeout: 300\n  max_concurrent: 5\n  retry_policy:\n    max_retries: 3\n    initial_delay: 1.0\n    exponential_base: 2.0\n\nenvironment:\n  variables:\n    LOG_LEVEL: INFO\n    EMAIL_SUBJECT: \"Workflow Notification\"\n  secrets:\n    - GMAIL_CREDENTIALS\n    - SMTP_PASSWORD\n\nstates:\n  - name: start\n    type: builtin.start\n    description: \"Initialize the workflow\"\n    transitions:\n      - on_success: validate_input\n\n  - name: validate_input\n    type: builtin.conditional\n    description: \"Validate input parameters\"\n    config:\n      condition: \"context.get_variable('recipient_email') is not None\"\n    dependencies:\n      - name: start\n        type: required\n    transitions:\n      - on_true: send_notification\n      - on_false: handle_error\n\n  - name: send_notification\n    type: gmail.send_email\n    description: \"Send email notification\"\n    config:\n      to: \n        - \"{{ recipient_email }}\"\n      subject: \"{{ EMAIL_SUBJECT }}\"\n      body: |\n        Hello,\n        \n        This is an automated notification from your workflow system.\n        \n        Workflow: {{ workflow_name }}\n        Timestamp: {{ current_timestamp }}\n        \n        Best regards,\n        Workflow System\n    resources:\n      cpu_units: 0.1\n      memory_mb: 50\n      network_weight: 1.0\n    dependencies:\n      - name: validate_input\n        type: required\n    transitions:\n      - on_success: log_success\n      - on_failure: handle_error\n\n  - name: log_success\n    type: builtin.transform\n    description: \"Log successful completion\"\n    dependencies:\n      - name: send_notification\n        type: required\n    transitions:\n      - on_success: end\n\n  - name: handle_error\n    type: builtin.error_handler\n    description: \"Handle workflow errors\"\n    config:\n      log_level: ERROR\n      notify: true\n      retry_count: 2\n    transitions:\n      - on_complete: end\n\n  - name: end\n    type: builtin.end\n    description: \"Workflow completion\"\n\nschedule:\n  enabled: false\n  cron: \"0 9 * * MON-FRI\"\n  timezone: \"UTC\"\n  max_instances: 1",
+    "yaml_content": "name: my_workflow\nversion: \"1.0.0\"\ndescription: \"Describe what your workflow does\"\nauthor: \"Your Name\"\n\nconfig:\n  timeout: 300\n  max_concurrent: 5\n\nenvironment:\n  variables:\n    LOG_LEVEL: INFO\n  secrets: []\n\nstates:\n  - name: start\n    type: builtin.start\n    description: \"Workflow starting point\"\n    transitions:\n      - on_success: end\n\n  - name: end\n    type: builtin.end\n    description: \"Workflow completion\"",
     "status": "created",
-    "created_at": "2025-06-08T20:00:00.765250Z",
-    "updated_at": "2025-06-08T20:00:00.765250Z",
-    "states_count": 6,
-    "metadata": {}
+    "created_at": "2025-06-11T19:11:37.986380Z",
+    "updated_at": "2025-06-11T19:11:37.986380Z",
+    "states_count": 2,
+    "metadata": {},
+    "last_execution": "2025-06-11T19:11:45.375622Z"
   }
 }
