@@ -9,6 +9,18 @@
     "updated_at": "2025-06-11T19:11:37.986380Z",
     "states_count": 2,
     "metadata": {},
-    "last_execution": "2025-06-11T19:11:45.375622Z"
+    "last_execution": "2025-06-12T13:51:44.302091Z"
+  },
+  "43e27c1e-373b-4eaa-b189-1b2e55b2a8c3": {
+    "workflow_id": "43e27c1e-373b-4eaa-b189-1b2e55b2a8c3",
+    "name": "multi_step_workflow",
+    "description": "",
+    "yaml_content": "name: multi_step_workflow\r\nversion: \"1.0.0\"\r\ndescription: \"Multi-step workflow for testing monitoring\"\r\nauthor: \"Test User\"\r\n\r\nconfig:\r\n  timeout: 300\r\n  max_concurrent: 5\r\n\r\nenvironment:\r\n  variables:\r\n    LOG_LEVEL: INFO\r\n  secrets: []\r\n\r\nstates:\r\n  - name: start\r\n    type: builtin.start\r\n    description: \"Workflow starting point\"\r\n    transitions:\r\n      - on_success: step1\r\n\r\n  - name: step1\r\n    type: builtin.transform\r\n    description: \"First processing step\"\r\n    config:\r\n      message: \"Processing step 1\"\r\n    transitions:\r\n      - on_success: step2\r\n\r\n  - name: step2\r\n    type: builtin.transform\r\n    description: \"Second processing step\"  \r\n    config:\r\n      message: \"Processing step 2\"\r\n    transitions:\r\n      - on_success: step3\r\n\r\n  - name: step3\r\n    type: builtin.transform\r\n    description: \"Third processing step\"\r\n    config:\r\n      message: \"Processing step 3\"\r\n    transitions:\r\n      - on_success: end\r\n\r\n  - name: end\r\n    type: builtin.end\r\n    description: \"Workflow completion\"",
+    "status": "created",
+    "created_at": "2025-06-12T13:51:14.568992Z",
+    "updated_at": "2025-06-12T13:51:14.568992Z",
+    "states_count": 5,
+    "metadata": {},
+    "last_execution": "2025-06-12T13:52:05.988566Z"
   }
 }
