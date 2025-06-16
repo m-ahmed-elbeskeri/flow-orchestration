@@ -6,6 +6,12 @@ author: Workflow Orchestrator Team
 states:
   send_message:
     description: Send a message to a Slack channel
+    ui:
+      icon: message-circle
+      color: "#4a154b"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       channel:
         type: string
@@ -14,109 +20,158 @@ states:
       text:
         type: string
         required: true
+        description: Message text
       thread_ts:
         type: string
+        required: false
         description: Thread timestamp for replies
       blocks:
         type: array
+        required: false
         description: Rich message blocks
       attachments:
         type: array
+        required: false
         description: Message attachments
       token:
         type: string
         required: true
         secret: true
+        description: Slack bot token
     outputs:
       ts:
         type: string
         description: Message timestamp
       channel:
         type: string
+        description: Channel ID
       thread_ts:
         type: string
+        description: Thread timestamp
     resources:
       network_weight: 1.0
-      
+
   read_messages:
     description: Read messages from a Slack channel
+    ui:
+      icon: inbox
+      color: "#4a154b"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       channel:
         type: string
         required: true
+        description: Channel ID or name
       limit:
         type: integer
         default: 10
+        description: Number of messages to read
       oldest:
         type: string
+        required: false
         description: Oldest message timestamp
       latest:
         type: string
+        required: false
         description: Latest message timestamp
       token:
         type: string
         required: true
         secret: true
+        description: Slack bot token
     outputs:
       messages:
         type: array
+        description: Retrieved messages
         items:
           type: object
       has_more:
         type: boolean
+        description: Whether more messages are available
     resources:
       network_weight: 1.0
-      
+
   upload_file:
     description: Upload a file to Slack
+    ui:
+      icon: upload
+      color: "#4a154b"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       channels:
         type: array
         required: true
+        description: Channels to upload to
         items:
           type: string
       content:
         type: string
         required: true
+        description: File content (base64 or text)
       filename:
         type: string
         required: true
+        description: File name
       title:
         type: string
+        required: false
+        description: File title
       initial_comment:
         type: string
+        required: false
+        description: Initial comment
       token:
         type: string
         required: true
         secret: true
+        description: Slack bot token
     outputs:
       file_id:
         type: string
+        description: Uploaded file ID
       url:
         type: string
+        description: File URL
     resources:
       network_weight: 2.0
-      
+
   create_channel:
     description: Create a new Slack channel
+    ui:
+      icon: plus-circle
+      color: "#4a154b"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       name:
         type: string
         required: true
+        description: Channel name
       is_private:
         type: boolean
         default: false
+        description: Create as private channel
       description:
         type: string
+        required: false
+        description: Channel description
       token:
         type: string
         required: true
         secret: true
+        description: Slack bot token
     outputs:
       channel_id:
         type: string
+        description: Created channel ID
       channel_name:
         type: string
+        description: Created channel name
     resources:
       network_weight: 1.0
 

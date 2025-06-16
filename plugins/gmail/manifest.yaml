@@ -6,31 +6,46 @@ author: Workflow Orchestrator Team
 states:
   send_email:
     description: Send an email via Gmail
+    ui:
+      icon: mail
+      color: "#dc2626"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       to:
         type: array
         required: true
+        description: Recipient email addresses
         items:
           type: string
           format: email
       subject:
         type: string
         required: true
+        description: Email subject line
       body:
         type: string
         required: true
+        description: Email body content
       cc:
         type: array
+        required: false
+        description: CC recipients
         items:
           type: string
           format: email
       bcc:
         type: array
+        required: false
+        description: BCC recipients
         items:
           type: string
           format: email
       attachments:
         type: array
+        required: false
+        description: Email attachments
         items:
           type: object
           properties:
@@ -43,63 +58,90 @@ states:
         type: object
         required: true
         secret: true
+        description: Gmail API credentials
     outputs:
       message_id:
         type: string
+        description: Gmail message ID
       thread_id:
         type: string
+        description: Gmail thread ID
     resources:
       network_weight: 1.0
-      
+
   read_emails:
     description: Read emails from Gmail
+    ui:
+      icon: mail-open
+      color: "#2563eb"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       query:
         type: string
         default: "is:unread"
+        description: Gmail search query
       max_results:
         type: integer
         default: 10
+        description: Maximum number of emails to fetch
       mark_as_read:
         type: boolean
         default: false
+        description: Mark emails as read after fetching
       credentials:
         type: object
         required: true
         secret: true
+        description: Gmail API credentials
     outputs:
       emails:
         type: array
+        description: Retrieved emails
         items:
           type: object
       count:
         type: integer
+        description: Number of emails retrieved
     resources:
       network_weight: 1.0
-      
+
   search_emails:
     description: Search emails in Gmail
+    ui:
+      icon: search
+      color: "#059669"
+      category: communication
+      shape: rectangle
+      size: medium
     inputs:
       query:
         type: string
         required: true
+        description: Search query
       max_results:
         type: integer
         default: 50
+        description: Maximum search results
       include_body:
         type: boolean
         default: true
+        description: Include email body in results
       credentials:
         type: object
         required: true
         secret: true
+        description: Gmail API credentials
     outputs:
       results:
         type: array
+        description: Search results
         items:
           type: object
       total:
         type: integer
+        description: Total number of matches
     resources:
       network_weight: 1.0
 

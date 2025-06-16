@@ -6,6 +6,12 @@ author: Workflow Orchestrator Team
 states:
   http_request:
     description: Make an HTTP request
+    ui:
+      icon: globe
+      color: "#059669"
+      category: integration
+      shape: rectangle
+      size: medium
     inputs:
       url:
         type: string
@@ -15,39 +21,57 @@ states:
         type: string
         default: GET
         enum: [GET, POST, PUT, DELETE, PATCH]
+        description: HTTP method
       headers:
         type: object
         default: {}
+        description: HTTP headers
       body:
         type: any
         required: false
+        description: Request body
       timeout:
         type: number
         default: 30
+        description: Request timeout in seconds
     outputs:
       status_code:
         type: integer
+        description: HTTP status code
       headers:
         type: object
+        description: Response headers
       body:
         type: any
+        description: Response body
       error:
         type: string
         required: false
+        description: Error message if request failed
     resources:
       network_weight: 1.0
-      
+
   webhook_receiver:
     description: Receive webhook callbacks
+    ui:
+      icon: server
+      color: "#7c3aed"
+      category: integration
+      shape: rectangle
+      size: medium
     inputs:
       endpoint:
         type: string
         required: true
+        description: Webhook endpoint path
       timeout:
         type: number
         default: 300
+        description: Wait timeout in seconds
       validation:
         type: object
+        required: false
+        description: Webhook validation config
         properties:
           secret:
             type: string
@@ -56,25 +80,39 @@ states:
     outputs:
       payload:
         type: any
+        description: Received webhook payload
       headers:
         type: object
+        description: Request headers
     resources:
       network_weight: 0.5
-      
+
   webhook_sender:
     description: Send webhook notifications
+    ui:
+      icon: send
+      color: "#dc2626"
+      category: integration
+      shape: rectangle
+      size: medium
     inputs:
       url:
         type: string
         required: true
+        description: Webhook URL
       payload:
         type: any
         required: true
+        description: Payload to send
       secret:
         type: string
         required: false
+        secret: true
+        description: Webhook secret for signing
       retry:
         type: object
+        required: false
+        description: Retry configuration
         properties:
           max_attempts:
             type: integer
@@ -85,8 +123,10 @@ states:
     outputs:
       success:
         type: boolean
+        description: Whether webhook was sent successfully
       response:
         type: any
+        description: Response from webhook endpoint
     resources:
       network_weight: 1.0
 

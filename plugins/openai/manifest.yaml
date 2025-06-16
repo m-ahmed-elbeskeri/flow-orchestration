@@ -6,14 +6,22 @@ author: Workflow Orchestrator Team
 states:
   chat_completion:
     description: Generate chat completions using OpenAI GPT models
+    ui:
+      icon: message-square
+      color: "#10a37f"
+      category: ai
+      shape: rectangle
+      size: medium
     inputs:
       model:
         type: string
         default: gpt-4
         enum: [gpt-4, gpt-4-turbo, gpt-3.5-turbo]
+        description: OpenAI model to use
       messages:
         type: array
         required: true
+        description: Chat messages
         items:
           type: object
           properties:
@@ -27,18 +35,23 @@ states:
         default: 0.7
         minimum: 0
         maximum: 2
+        description: Sampling temperature
       max_tokens:
         type: integer
         default: 1000
+        description: Maximum tokens to generate
       api_key:
         type: string
         required: true
         secret: true
+        description: OpenAI API key
     outputs:
       response:
         type: string
+        description: Generated text response
       usage:
         type: object
+        description: Token usage statistics
         properties:
           prompt_tokens:
             type: integer
@@ -48,53 +61,76 @@ states:
             type: integer
     resources:
       network_weight: 2.0
-      
+
   embeddings:
     description: Generate embeddings using OpenAI models
+    ui:
+      icon: layers
+      color: "#10a37f"
+      category: ai
+      shape: rectangle
+      size: medium
     inputs:
       model:
         type: string
         default: text-embedding-ada-002
+        description: Embedding model to use
       input:
         type: string
         required: true
+        description: Text to embed
       api_key:
         type: string
         required: true
         secret: true
+        description: OpenAI API key
     outputs:
       embedding:
         type: array
+        description: Embedding vector
         items:
           type: number
       dimensions:
         type: integer
+        description: Embedding dimensions
     resources:
       network_weight: 1.0
-      
+
   function_calling:
     description: Use OpenAI function calling
+    ui:
+      icon: code
+      color: "#10a37f"
+      category: ai
+      shape: rectangle
+      size: large
     inputs:
       model:
         type: string
         default: gpt-4
+        description: OpenAI model to use
       messages:
         type: array
         required: true
+        description: Chat messages
       functions:
         type: array
         required: true
+        description: Available functions
         items:
           type: object
       api_key:
         type: string
         required: true
         secret: true
+        description: OpenAI API key
     outputs:
       function_call:
         type: object
+        description: Function call details
       response:
         type: string
+        description: Model response
     resources:
       network_weight: 2.0
 

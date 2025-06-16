@@ -408,6 +408,21 @@ export interface FileUpload {
   workflow_id?: string
 }
 
+export interface NodeAppearance {
+  icon: string
+  color: string
+  category: string
+  description: string
+  inputs: Record<string, NodeInput>
+  outputs: Record<string, NodeOutput>
+  ui_config: {
+    shape?: 'rectangle' | 'circle' | 'diamond'
+    size?: 'small' | 'medium' | 'large'
+    hideable?: boolean
+    [key: string]: any
+  }
+}
+
 // Export types
 export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'paused' | 'cancelled'
 export type StateStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'retrying' | 'paused' | 'cancelled'
