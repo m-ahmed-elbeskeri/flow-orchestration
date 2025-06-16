@@ -173,7 +173,6 @@ const VisualWorkflowDesignerInner: React.FC<VisualWorkflowDesignerProps> = ({
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [availableNodes, setAvailableNodes] = useState<Record<string, NodeAppearance>>({});
   const [nodeCategories, setNodeCategories] = useState<Record<string, string[]>>({});
-  const [isAddingNode, setIsAddingNode] = useState(false);
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { project } = useReactFlow();
@@ -190,6 +189,16 @@ const VisualWorkflowDesignerInner: React.FC<VisualWorkflowDesignerProps> = ({
     }
   }, [initialYaml, setNodes, setEdges]);
 
+  // Auto-generate YAML when nodes or edges change
+  useEffect(() => {
+    if (nodes.length > 0 || edges.length > 0) {
+      const yaml = generateYAML();
+      if (yaml && onChange) {
+        onChange(yaml);
+      }
+    }
+  }, [nodes, edges, onChange]);
+
   const loadAvailableNodes = async () => {
     try {
       const nodes = await workflowApi.getAvailableNodes();
@@ -205,6 +214,60 @@ const VisualWorkflowDesignerInner: React.FC<VisualWorkflowDesignerProps> = ({
       setNodeCategories(categories);
     } catch (error) {
       console.error('Failed to load available nodes:', error);
+      // Fallback to default nodes if API fails
+      const defaultNodes = {
+        'builtin.start': { 
+          icon: 'play-circle', 
+          color: '#10b981', 
+          category: 'core',
+          description: 'Start node'
+        },
+        'builtin.end': { 
+          icon: 'check-circle', 
+          color: '#ef4444', 
+          category: 'core',
+          description: 'End node'
+        },
+        'builtin.transform': { 
+          icon: 'zap', 
+          color: '#3b82f6', 
+          category: 'core',
+          description: 'Transform data'
+        },
+        'builtin.conditional': { 
+          icon: 'git-branch', 
+          color: '#f59e0b', 
+          category: 'core',
+          description: 'Conditional logic'
+        },
+        'gmail.send_email': { 
+          icon: 'mail', 
+          color: '#dc2626', 
+          category: 'communication',
+          description: 'Send email via Gmail'
+        },
+        'slack.send_message': { 
+          icon: 'message-circle', 
+          color: '#7c3aed', 
+          category: 'communication',
+          description: 'Send Slack message'
+        },
+        'webhook.http_request': { 
+          icon: 'globe', 
+          color: '#059669', 
+          category: 'integration',
+          description: 'HTTP request'
+        }
+      };
+      setAvailableNodes(defaultNodes);
+      
+      const categories: Record<string, string[]> = {};
+      Object.entries(defaultNodes).forEach(([nodeType, appearance]) => {
+        const category = appearance.category || 'other';
+        if (!categories[category]) categories[category] = [];
+        categories[category].push(nodeType);
+      });
+      setNodeCategories(categories);
     }
   };
 
@@ -238,6 +301,8 @@ const VisualWorkflowDesignerInner: React.FC<VisualWorkflowDesignerProps> = ({
           };
         } else if (trimmed.startsWith('type:') && currentState) {
           currentState.type = trimmed.replace('type:', '').trim();
+        } else if (trimmed.startsWith('description:') && currentState) {
+          currentState.description = trimmed.replace('description:', '').replace(/"/g, '').trim();
         }
       }
       
@@ -266,7 +331,7 @@ const VisualWorkflowDesignerInner: React.FC<VisualWorkflowDesignerProps> = ({
             ),
             type: state.type,
             config: state.config || {},
-            description: appearance?.description || ''
+            description: state.description || appearance?.description || ''
           },
           style: {
             background: '#fff',
@@ -333,7 +398,6 @@ ${states.map(state => `  - name: ${state.name}
     config:
 ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof value === 'string' ? `"${value}"` : value}`).join('\n')}` : ''}`).join('\n')}`;
 
-      onChange?.(yaml);
       return yaml;
     } catch (error) {
       console.error('Failed to generate YAML:', error);
@@ -352,7 +416,6 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
-    setIsAddingNode(false);
   }, []);
 
   const onDrop = useCallback(
@@ -433,7 +496,7 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
   }, [setNodes]);
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex" style={{ height: '100%' }}>
       {/* Node Palette */}
       <div className="w-64 bg-gray-50 border-r border-gray-200 p-4 overflow-y-auto">
         <h3 className="text-lg font-semibold mb-4">Available Nodes</h3>
@@ -480,7 +543,7 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative" style={{ height: '100%' }}>
         <div ref={reactFlowWrapper} className="h-full">
           <ReactFlow
             nodes={nodes}
@@ -495,6 +558,7 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
             connectionLineType={ConnectionLineType.Bezier}
             edgeTypes={{ default: CustomEdge }}
             fitView
+            style={{ height: '100%' }}
           >
             <Controls />
             <MiniMap />
@@ -505,12 +569,14 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
                 <button
                   onClick={() => onChange?.(generateYAML())}
                   className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  title="Update YAML"
                 >
                   <Eye size={16} />
                 </button>
                 <button
                   onClick={() => onSave?.(generateYAML())}
                   className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                  title="Save Workflow"
                 >
                   <Check size={16} />
                 </button>
@@ -518,6 +584,7 @@ ${Object.entries(state.config).map(([key, value]) => `      ${key}: ${typeof val
                   <button
                     onClick={deleteSelectedNode}
                     className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                    title="Delete Selected Node"
                   >
                     <Trash2 size={16} />
                   </button>

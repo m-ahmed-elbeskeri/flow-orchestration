@@ -1,12 +1,15 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Code, Plus, Save, Play, FileText, Copy, Download, Wand2, ArrowLeft, Settings, Eye, CheckCircle, AlertCircle } from 'lucide-react'
+import { Code, Plus, Save, Play, FileText, Copy, Download, Wand2, ArrowLeft, Settings, Eye, CheckCircle, AlertCircle, Workflow } from 'lucide-react'
 import { workflowApi } from '../api/client'
 import { downloadFile } from '../utils/download'
 import type { WorkflowCreateRequest } from '../types/workflow'
 
 // Monaco Editor
 import Editor from '@monaco-editor/react'
+
+// Import the Visual Workflow Designer
+import VisualWorkflowDesigner from './VisualWorkflowDesigner'
 
 const WORKFLOW_TEMPLATES = {
   basic_email: {
@@ -396,7 +399,7 @@ export default function WorkflowCreator() {
   const [isValidating, setIsValidating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isGeneratingCode, setIsGeneratingCode] = useState(false)
-  const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor')
+  const [activeTab, setActiveTab] = useState<'visual' | 'editor' | 'preview'>('visual') // Default to visual
   const editorRef = useRef<any>(null)
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
@@ -448,6 +451,13 @@ export default function WorkflowCreator() {
       // Reset validation when template changes
       setValidationResult(null)
     }
+  }
+
+  // Add handler for visual designer changes
+  const handleVisualDesignerChange = (yaml: string) => {
+    setFormData({ ...formData, yamlContent: yaml })
+    // Reset validation when content changes
+    setValidationResult(null)
   }
 
   const validateWorkflow = async () => {
@@ -769,11 +779,22 @@ export default function WorkflowCreator() {
             </div>
           </div>
 
-          {/* Center - Editor - Fixed height with overflow */}
+          {/* Center - Designer/Editor - Fixed height with overflow */}
           <div className="col-span-6">
             <div className="bg-white rounded-lg shadow-sm border h-full overflow-hidden flex flex-col">
               <div className="flex justify-between items-center px-6 py-4 border-b flex-shrink-0">
                 <div className="flex space-x-1">
+                  <button
+                    onClick={() => setActiveTab('visual')}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                      activeTab === 'visual'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Workflow className="w-4 h-4 inline mr-2" />
+                    Visual Designer
+                  </button>
                   <button
                     onClick={() => setActiveTab('editor')}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
@@ -800,7 +821,15 @@ export default function WorkflowCreator() {
               </div>
               
               <div className="flex-1 min-h-0">
-                {activeTab === 'editor' ? (
+                {activeTab === 'visual' ? (
+                  <div className="h-full">
+                    <VisualWorkflowDesigner
+                      initialYaml={formData.yamlContent}
+                      onChange={handleVisualDesignerChange}
+                      onSave={handleVisualDesignerChange}
+                    />
+                  </div>
+                ) : activeTab === 'editor' ? (
                   <Editor
                     height="100%"
                     defaultLanguage="yaml"
@@ -838,7 +867,7 @@ export default function WorkflowCreator() {
                       ) : (
                         <div className="text-center py-12 text-gray-500">
                           <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                          <p>Select a template or start writing YAML to see the preview</p>
+                          <p>Select a template or start designing your workflow to see the preview</p>
                         </div>
                       )}
                     </div>
