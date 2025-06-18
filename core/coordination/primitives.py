@@ -1,4 +1,4 @@
-"""Coordination primitives for distributed systems from paste-2.txt."""
+"""Coordination primitives for distributed systems."""
 
 from dataclasses import dataclass, field
 from typing import Dict, Set, Optional, List, Any, Union, Callable

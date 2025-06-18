@@ -1,4 +1,4 @@
-"""Production-grade coordination system with comprehensive monitoring and control from paste-2.txt."""
+"""Coordination system with comprehensive monitoring and control."""
 
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Set, Optional, List, Any, Union, Callable
@@ -21,7 +21,7 @@ class AgentCoordinator:
     """Enhanced agent coordination system"""
 
     def __init__(
-            self,
+            self,S
             agent: Any,
             detection_interval: float = 1.0,
             cleanup_interval: float = 60.0

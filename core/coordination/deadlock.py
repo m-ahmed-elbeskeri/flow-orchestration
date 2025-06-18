@@ -1,4 +1,4 @@
-"""Deadlock detection for workflow execution from paste-2.txt."""
+"""Deadlock detection for workflow execution"""
 
 from typing import Dict, Set, Optional, List, Any, Tuple
 import asyncio

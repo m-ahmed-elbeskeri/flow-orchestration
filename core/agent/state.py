@@ -5,9 +5,10 @@ from typing import Set, Dict, Union, List, Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 import uuid
 
-
+# Import directly from specific modules to avoid circular imports
 if TYPE_CHECKING:
-    from core.agent.base import Agent
+    from core.agent.base import Agent, RetryPolicy
+    from core.agent.dependencies import DependencyConfig
 
 # Type definitions
 StateResult = Union[str, List[Union[str, Tuple["Agent", str]]], None]
@@ -58,13 +59,20 @@ class StateMetadata:
     status: StateStatus
     attempts: int = 0
     max_retries: int = 3
-    resources: "ResourceRequirements" = field(default_factory=lambda: ResourceRequirements())
+    resources: Optional["ResourceRequirements"] = None
     dependencies: Dict[str, "DependencyConfig"] = field(default_factory=dict)
     satisfied_dependencies: Set[str] = field(default_factory=set)
     last_execution: Optional[float] = None
     last_success: Optional[float] = None
     state_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     retry_policy: Optional["RetryPolicy"] = None
+    priority: Priority = Priority.NORMAL
+
+    def __post_init__(self):
+        """Initialize resources if not provided."""
+        if self.resources is None:
+            from core.resources.requirements import ResourceRequirements
+            self.resources = ResourceRequirements()
 
 
 @dataclass(order=True)

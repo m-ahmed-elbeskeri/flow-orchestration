@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Code, Plus, Save, Play, FileText, Copy, Download, Wand2, ArrowLeft, Settings, Eye, CheckCircle, AlertCircle, Workflow } from 'lucide-react'
+import { Code, Plus, Save, Play, FileText, Copy, Download, Wand2, ArrowLeft, Settings, Eye, CheckCircle, AlertCircle, Workflow, Activity, Zap } from 'lucide-react'
 import { workflowApi } from '../api/client'
 import { downloadFile } from '../utils/download'
 import type { WorkflowCreateRequest } from '../types/workflow'
@@ -399,13 +399,13 @@ export default function WorkflowCreator() {
   const [isValidating, setIsValidating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isGeneratingCode, setIsGeneratingCode] = useState(false)
-  const [activeTab, setActiveTab] = useState<'visual' | 'editor' | 'preview'>('visual') // Default to visual
+  const [activeTab, setActiveTab] = useState<'visual' | 'editor' | 'preview'>('visual')
   const editorRef = useRef<any>(null)
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
     editorRef.current = editor
 
-    // Configure YAML language support
+    // Configure YAML language support with dark theme
     monaco.languages.setMonarchTokensProvider('yaml', {
       tokenizer: {
         root: [
@@ -420,23 +420,27 @@ export default function WorkflowCreator() {
       }
     })
 
-    // Set editor theme
-    monaco.editor.defineTheme('workflow-theme', {
-      base: 'vs',
+    // Set dark theme
+    monaco.editor.defineTheme('workflow-dark-theme', {
+      base: 'vs-dark',
       inherit: true,
       rules: [
-        { token: 'key', foreground: '0066cc', fontStyle: 'bold' },
-        { token: 'string', foreground: '009900' },
-        { token: 'comment', foreground: '999999', fontStyle: 'italic' },
-        { token: 'delimiter', foreground: 'ff6600' },
-        { token: 'boolean', foreground: '9900cc' },
-        { token: 'number', foreground: 'cc6600' },
+        { token: 'key', foreground: '00d4ff', fontStyle: 'bold' },
+        { token: 'string', foreground: '10b981' },
+        { token: 'comment', foreground: '6b7280', fontStyle: 'italic' },
+        { token: 'delimiter', foreground: 'f59e0b' },
+        { token: 'boolean', foreground: '8b5cf6' },
+        { token: 'number', foreground: 'f97316' },
       ],
       colors: {
-        'editor.background': '#fafafa'
+        'editor.background': '#1f2937',
+        'editor.foreground': '#f9fafb',
+        'editorLineNumber.foreground': '#6b7280',
+        'editor.selectionBackground': '#374151',
+        'editor.lineHighlightBackground': '#374151',
       }
     })
-    monaco.editor.setTheme('workflow-theme')
+    monaco.editor.setTheme('workflow-dark-theme')
   }
 
   const handleTemplateSelect = (templateKey: string) => {
@@ -448,15 +452,12 @@ export default function WorkflowCreator() {
         description: template.description,
         yamlContent: template.yaml
       })
-      // Reset validation when template changes
       setValidationResult(null)
     }
   }
 
-  // Add handler for visual designer changes
   const handleVisualDesignerChange = (yaml: string) => {
     setFormData({ ...formData, yamlContent: yaml })
-    // Reset validation when content changes
     setValidationResult(null)
   }
 
@@ -589,7 +590,6 @@ export default function WorkflowCreator() {
     return acc
   }, {} as Record<string, any[]>)
 
-  // Validation status helper
   const getValidationStatus = () => {
     if (!validationResult) return null
     return validationResult.is_valid ? 'valid' : 'invalid'
@@ -598,24 +598,32 @@ export default function WorkflowCreator() {
   const isValidated = validationResult && validationResult.is_valid
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Header - Fixed height */}
-      <div className="bg-white border-b shadow-sm flex-shrink-0">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
+    <div className="h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex flex-col overflow-hidden">
+      {/* Enhanced Header */}
+      <div className="bg-gray-800/95 border-b border-gray-700 shadow-2xl flex-shrink-0 backdrop-blur-sm">
+        <div className="max-w-full mx-auto px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
             <div className="flex items-center">
               <button
                 onClick={() => navigate('/workflows')}
-                className="mr-4 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                className="mr-4 p-2.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700/50 rounded-xl transition-all duration-200"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-                  <Plus className="w-8 h-8 mr-3 text-blue-600" />
-                  Create New Workflow
-                </h1>
-                <p className="text-gray-600 mt-1">Design and configure your automation workflow</p>
+              <div className="flex items-center">
+                <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl mr-4 shadow-lg">
+                  <Plus className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold text-white flex items-center">
+                    Create New Workflow
+                    <div className="ml-3 flex items-center space-x-2 bg-blue-500/20 px-3 py-1 rounded-full border border-blue-400/30">
+                      <Activity className="w-3 h-3 text-blue-400 animate-pulse" />
+                      <span className="text-xs text-blue-300 font-medium">AI Powered</span>
+                    </div>
+                  </h1>
+                  <p className="text-gray-400 mt-1">Design and configure your automation workflow with AI assistance</p>
+                </div>
               </div>
             </div>
             
@@ -623,7 +631,7 @@ export default function WorkflowCreator() {
               <button
                 onClick={copyToClipboard}
                 disabled={!formData.yamlContent.trim()}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                className="px-4 py-2 text-gray-300 hover:text-white hover:bg-gray-700/50 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center backdrop-blur-sm"
               >
                 <Copy className="w-4 h-4 mr-2" />
                 Copy YAML
@@ -632,325 +640,350 @@ export default function WorkflowCreator() {
               <button
                 onClick={handleGenerateCode}
                 disabled={isGeneratingCode || !formData.yamlContent.trim()}
-                className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
+                className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center shadow-lg"
               >
                 <Code className="w-4 h-4 mr-2" />
-                {isGeneratingCode ? 'Generating...' : 'Generate Code'}
+                {isGeneratingCode ? (
+                  <>
+                    <Activity className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Code'
+                )}
               </button>
               
               <button
                 onClick={validateWorkflow}
                 disabled={isValidating || !formData.yamlContent.trim()}
-                className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
+                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center shadow-lg"
               >
-                <CheckCircle className="w-4 h-4 mr-2" />
-                {isValidating ? 'Validating...' : 'Validate Workflow'}
+                {isValidating ? (
+                  <>
+                    <Activity className="w-4 h-4 mr-2 animate-spin" />
+                    Validating...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Validate
+                  </>
+                )}
               </button>
               
               <button
                 onClick={saveWorkflow}
                 disabled={isSaving || !isValidated || !formData.name.trim() || !formData.yamlContent.trim()}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
+                className="px-6 py-2 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center shadow-lg"
               >
-                <Save className="w-4 h-4 mr-2" />
-                {isSaving ? 'Saving...' : 'Save Workflow'}
+                {isSaving ? (
+                  <>
+                    <Activity className="w-4 h-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Workflow
+                  </>
+                )}
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Content - Flex grow with proper constraints */}
-      <div className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 min-h-0">
-        <div className="grid grid-cols-12 gap-8 h-full">
-          {/* Left Sidebar - Fixed width, scrollable */}
-          <div className="col-span-3">
-            <div className="bg-white rounded-lg shadow-sm border h-full overflow-hidden flex flex-col">
-              <div className="p-6 border-b flex-shrink-0">
-                <h2 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <Settings className="w-5 h-5 mr-2 text-gray-600" />
-                  Configuration
-                </h2>
-              </div>
+      {/* Main Content - Full height layout */}
+      <div className="flex-1 flex min-h-0">
+        {/* Left Sidebar - Enhanced Dark Theme */}
+        <div className="w-80 bg-gray-900/95 border-r border-gray-700 shadow-2xl overflow-hidden flex flex-col backdrop-blur-sm">
+          <div className="p-6 border-b border-gray-700 flex-shrink-0 bg-gradient-to-r from-gray-800/50 to-gray-900/50">
+            <h2 className="text-lg font-semibold text-white flex items-center">
+              <Settings className="w-5 h-5 mr-3 text-blue-400" />
+              Configuration
+            </h2>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-6">
+            {/* Workflow Info */}
+            <div className="mb-8">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center">
+                <div className="w-1 h-4 bg-gradient-to-b from-blue-400 to-purple-500 rounded-full mr-3"></div>
+                Basic Information
+              </h3>
               
-              <div className="flex-1 overflow-y-auto p-6">
-                {/* Workflow Info */}
-                <div className="mb-8">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-4">Basic Information</h3>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Workflow Name *
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="Enter workflow name..."
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Description
-                      </label>
-                      <textarea
-                        value={formData.description}
-                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                        placeholder="Describe what this workflow does..."
-                        rows={3}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Validation Status */}
-                {validationResult && (
-                  <div className="mb-8">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-4">Validation Status</h3>
-                    <div className={`p-3 rounded-lg border ${
-                      validationResult.is_valid 
-                        ? 'bg-green-50 border-green-200' 
-                        : 'bg-red-50 border-red-200'
-                    }`}>
-                      <div className="flex items-center">
-                        {validationResult.is_valid ? (
-                          <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-red-600 mr-2" />
-                        )}
-                        <span className={`text-sm font-medium ${
-                          validationResult.is_valid ? 'text-green-800' : 'text-red-800'
-                        }`}>
-                          {validationResult.is_valid ? 'Valid Configuration' : 'Invalid Configuration'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Templates */}
+              <div className="space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center">
-                    <Wand2 className="w-4 h-4 mr-2 text-purple-600" />
-                    Templates
-                  </h3>
-                  
-                  <div className="space-y-6">
-                    {Object.entries(templatesByCategory).map(([category, templates]) => (
-                      <div key={category}>
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                          {category}
-                        </h4>
-                        <div className="space-y-2">
-                          {templates.map((template) => (
-                            <button
-                              key={template.key}
-                              onClick={() => handleTemplateSelect(template.key)}
-                              className={`w-full text-left p-3 rounded-lg border transition-all ${
-                                selectedTemplate === template.key
-                                  ? 'border-blue-500 bg-blue-50 shadow-sm'
-                                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                              }`}
-                            >
-                              <div className="font-medium text-gray-900 text-sm">{template.name}</div>
-                              <div className="text-xs text-gray-600 mt-1 line-clamp-2">{template.description}</div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Quick Actions */}
-                <div className="mt-8 pt-6 border-t space-y-3">
-                  <button
-                    onClick={clearEditor}
-                    className="w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
-                  >
-                    Clear All
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Center - Designer/Editor - Fixed height with overflow */}
-          <div className="col-span-6">
-            <div className="bg-white rounded-lg shadow-sm border h-full overflow-hidden flex flex-col">
-              <div className="flex justify-between items-center px-6 py-4 border-b flex-shrink-0">
-                <div className="flex space-x-1">
-                  <button
-                    onClick={() => setActiveTab('visual')}
-                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                      activeTab === 'visual'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Workflow className="w-4 h-4 inline mr-2" />
-                    Visual Designer
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('editor')}
-                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                      activeTab === 'editor'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
-                    }`}
-                  >
-                    <FileText className="w-4 h-4 inline mr-2" />
-                    YAML Editor
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('preview')}
-                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                      activeTab === 'preview'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Eye className="w-4 h-4 inline mr-2" />
-                    Preview
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex-1 min-h-0">
-                {activeTab === 'visual' ? (
-                  <div className="h-full">
-                    <VisualWorkflowDesigner
-                      initialYaml={formData.yamlContent}
-                      onChange={handleVisualDesignerChange}
-                      onSave={handleVisualDesignerChange}
-                    />
-                  </div>
-                ) : activeTab === 'editor' ? (
-                  <Editor
-                    height="100%"
-                    defaultLanguage="yaml"
-                    value={formData.yamlContent}
-                    onChange={(value) => {
-                      setFormData({ ...formData, yamlContent: value || '' })
-                      // Reset validation when content changes
-                      setValidationResult(null)
-                    }}
-                    onMount={handleEditorDidMount}
-                    options={{
-                      minimap: { enabled: true },
-                      lineNumbers: 'on',
-                      roundedSelection: false,
-                      scrollBeyondLastLine: false,
-                      automaticLayout: true,
-                      fontSize: 14,
-                      tabSize: 2,
-                      insertSpaces: true,
-                      wordWrap: 'on',
-                      folding: true,
-                      showFoldingControls: 'always',
-                      bracketPairColorization: { enabled: true },
-                    }}
-                    theme="workflow-theme"
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Workflow Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Enter workflow name..."
+                    className="w-full px-3 py-2 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-700/50 text-white backdrop-blur-sm"
                   />
-                ) : (
-                  <div className="h-full p-6 overflow-y-auto bg-gray-50">
-                    <div className="prose max-w-none">
-                      <h3 className="text-lg font-semibold text-gray-900 mb-4">Workflow Preview</h3>
-                      {formData.yamlContent ? (
-                        <pre className="bg-white p-4 rounded-lg border text-sm overflow-x-auto whitespace-pre-wrap">
-                          {formData.yamlContent}
-                        </pre>
-                      ) : (
-                        <div className="text-center py-12 text-gray-500">
-                          <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                          <p>Select a template or start designing your workflow to see the preview</p>
-                        </div>
-                      )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="Describe what this workflow does..."
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-gray-700/50 text-white backdrop-blur-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Validation Status */}
+            {validationResult && (
+              <div className="mb-8">
+                <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center">
+                  <div className="w-1 h-4 bg-gradient-to-b from-green-400 to-blue-500 rounded-full mr-3"></div>
+                  Validation Status
+                </h3>
+                <div className={`p-4 rounded-xl border backdrop-blur-sm ${
+                  validationResult.is_valid 
+                    ? 'bg-green-500/20 border-green-400/30' 
+                    : 'bg-red-500/20 border-red-400/30'
+                }`}>
+                  <div className="flex items-center">
+                    {validationResult.is_valid ? (
+                      <CheckCircle className="w-5 h-5 text-green-400 mr-3" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-red-400 mr-3" />
+                    )}
+                    <span className={`text-sm font-medium ${
+                      validationResult.is_valid ? 'text-green-300' : 'text-red-300'
+                    }`}>
+                      {validationResult.is_valid ? 'Valid Configuration' : 'Invalid Configuration'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Templates */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center">
+                <div className="w-1 h-4 bg-gradient-to-b from-purple-400 to-pink-500 rounded-full mr-3"></div>
+                <Wand2 className="w-4 h-4 mr-2 text-purple-400" />
+                Templates
+              </h3>
+              
+              <div className="space-y-6">
+                {Object.entries(templatesByCategory).map(([category, templates]) => (
+                  <div key={category}>
+                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                      {category}
+                    </h4>
+                    <div className="space-y-2">
+                      {templates.map((template) => (
+                        <button
+                          key={template.key}
+                          onClick={() => handleTemplateSelect(template.key)}
+                          className={`w-full text-left p-4 rounded-xl border transition-all duration-200 backdrop-blur-sm ${
+                            selectedTemplate === template.key
+                              ? 'border-blue-500/50 bg-blue-500/20 shadow-lg shadow-blue-500/20'
+                              : 'border-gray-600/50 hover:border-gray-500 hover:bg-gray-700/30'
+                          }`}
+                        >
+                          <div className="font-medium text-white text-sm">{template.name}</div>
+                          <div className="text-xs text-gray-400 mt-1 line-clamp-2">{template.description}</div>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                )}
+                ))}
               </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="mt-8 pt-6 border-t border-gray-700 space-y-3">
+              <button
+                onClick={clearEditor}
+                className="w-full px-4 py-2 bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 rounded-xl transition-all duration-200 backdrop-blur-sm"
+              >
+                Clear All
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* Right Panel - Validation - Fixed height with overflow */}
-          <div className="col-span-3">
-            <div className="bg-white rounded-lg shadow-sm border h-full overflow-hidden flex flex-col">
-              <div className="p-6 border-b flex-shrink-0">
-                <h2 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <Play className="w-5 h-5 mr-2 text-green-600" />
-                  Validation
-                </h2>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-6">
-                {!validationResult && (
-                  <div className="text-center py-12 text-gray-500">
-                    <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
-                      <Play className="w-8 h-8 text-gray-400" />
-                    </div>
-                    <p className="text-sm">Click "Validate Workflow" to check your configuration</p>
-                  </div>
-                )}
-
-                {validationResult && (
-                  <div className="space-y-6">
-                    {/* Errors */}
-                    {validationResult.errors && validationResult.errors.length > 0 && (
-                      <div>
-                        <h4 className="font-semibold text-red-800 mb-3 flex items-center">
-                          <span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
-                          Errors ({validationResult.errors.length})
-                        </h4>
-                        <div className="space-y-2">
-                          {validationResult.errors.map((error: any, index: number) => (
-                            <div key={index} className="text-red-700 text-sm bg-red-50 p-3 rounded-lg border border-red-200">
-                              {error.message || error}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Warnings */}
-                    {validationResult.warnings && validationResult.warnings.length > 0 && (
-                      <div>
-                        <h4 className="font-semibold text-yellow-800 mb-3 flex items-center">
-                          <span className="w-2 h-2 bg-yellow-500 rounded-full mr-2"></span>
-                          Warnings ({validationResult.warnings.length})
-                        </h4>
-                        <div className="space-y-2">
-                          {validationResult.warnings.map((warning: any, index: number) => (
-                            <div key={index} className="text-yellow-700 text-sm bg-yellow-50 p-3 rounded-lg border border-yellow-200">
-                              {warning.message || warning}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Info */}
-                    {validationResult.info && Object.keys(validationResult.info).length > 0 && (
-                      <div>
-                        <h4 className="font-semibold text-blue-800 mb-3 flex items-center">
-                          <span className="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
-                          Workflow Info
-                        </h4>
-                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
-                          <pre className="text-blue-700 text-xs overflow-auto whitespace-pre-wrap">
-                            {JSON.stringify(validationResult.info, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+        {/* Center - Designer/Editor */}
+        <div className="flex-1 bg-gray-800/50 overflow-hidden flex flex-col backdrop-blur-sm">
+          <div className="flex justify-between items-center px-6 py-4 border-b border-gray-700 flex-shrink-0 bg-gray-800/50">
+            <div className="flex space-x-1">
+              <button
+                onClick={() => setActiveTab('visual')}
+                className={`px-4 py-2 text-sm font-medium rounded-xl transition-all duration-200 ${
+                  activeTab === 'visual'
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-400/30'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                }`}
+              >
+                <Workflow className="w-4 h-4 inline mr-2" />
+                Visual Designer
+              </button>
+              <button
+                onClick={() => setActiveTab('editor')}
+                className={`px-4 py-2 text-sm font-medium rounded-xl transition-all duration-200 ${
+                  activeTab === 'editor'
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-400/30'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                }`}
+              >
+                <FileText className="w-4 h-4 inline mr-2" />
+                YAML Editor
+              </button>
+              <button
+                onClick={() => setActiveTab('preview')}
+                className={`px-4 py-2 text-sm font-medium rounded-xl transition-all duration-200 ${
+                  activeTab === 'preview'
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-400/30'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                }`}
+              >
+                <Eye className="w-4 h-4 inline mr-2" />
+                Preview
+              </button>
             </div>
+          </div>
+          
+          <div className="flex-1 min-h-0">
+            {activeTab === 'visual' ? (
+              <div className="h-full">
+                <VisualWorkflowDesigner
+                  initialYaml={formData.yamlContent}
+                  onChange={handleVisualDesignerChange}
+                  onSave={handleVisualDesignerChange}
+                />
+              </div>
+            ) : activeTab === 'editor' ? (
+              <Editor
+                height="100%"
+                defaultLanguage="yaml"
+                value={formData.yamlContent}
+                onChange={(value) => {
+                  setFormData({ ...formData, yamlContent: value || '' })
+                  setValidationResult(null)
+                }}
+                onMount={handleEditorDidMount}
+                options={{
+                  minimap: { enabled: true },
+                  lineNumbers: 'on',
+                  roundedSelection: false,
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                  fontSize: 14,
+                  tabSize: 2,
+                  insertSpaces: true,
+                  wordWrap: 'on',
+                  folding: true,
+                  showFoldingControls: 'always',
+                  bracketPairColorization: { enabled: true },
+                }}
+                theme="workflow-dark-theme"
+              />
+            ) : (
+              <div className="h-full p-6 overflow-y-auto bg-gray-800/30">
+                <div className="max-w-none">
+                  <h3 className="text-lg font-semibold text-white mb-4">Workflow Preview</h3>
+                  {formData.yamlContent ? (
+                    <pre className="bg-gray-800/80 p-6 rounded-xl border border-gray-600 text-sm overflow-x-auto whitespace-pre-wrap text-gray-200 backdrop-blur-sm">
+                      {formData.yamlContent}
+                    </pre>
+                  ) : (
+                    <div className="text-center py-16 text-gray-400">
+                      <div className="w-20 h-20 mx-auto mb-6 bg-gray-700/50 rounded-full flex items-center justify-center backdrop-blur-sm">
+                        <FileText className="w-10 h-10 text-gray-500" />
+                      </div>
+                      <p className="text-lg">Select a template or start designing your workflow to see the preview</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Panel - Validation */}
+        <div className="w-80 bg-gray-900/95 border-l border-gray-700 shadow-2xl overflow-hidden flex flex-col backdrop-blur-sm">
+          <div className="p-6 border-b border-gray-700 flex-shrink-0 bg-gradient-to-r from-gray-800/50 to-gray-900/50">
+            <h2 className="text-lg font-semibold text-white flex items-center">
+              <Play className="w-5 h-5 mr-3 text-green-400" />
+              Validation
+            </h2>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-6">
+            {!validationResult && (
+              <div className="text-center py-16 text-gray-400">
+                <div className="w-20 h-20 mx-auto mb-6 bg-gray-700/50 rounded-full flex items-center justify-center backdrop-blur-sm">
+                  <Play className="w-10 h-10 text-gray-500" />
+                </div>
+                <p className="text-sm">Click "Validate Workflow" to check your configuration</p>
+              </div>
+            )}
+
+            {validationResult && (
+              <div className="space-y-6">
+                {/* Errors */}
+                {validationResult.errors && validationResult.errors.length > 0 && (
+                  <div>
+                    <h4 className="font-semibold text-red-300 mb-3 flex items-center">
+                      <span className="w-2 h-2 bg-red-500 rounded-full mr-3"></span>
+                      Errors ({validationResult.errors.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {validationResult.errors.map((error: any, index: number) => (
+                        <div key={index} className="text-red-300 text-sm bg-red-500/20 p-4 rounded-xl border border-red-400/30 backdrop-blur-sm">
+                          {error.message || error}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Warnings */}
+                {validationResult.warnings && validationResult.warnings.length > 0 && (
+                  <div>
+                    <h4 className="font-semibold text-yellow-300 mb-3 flex items-center">
+                      <span className="w-2 h-2 bg-yellow-500 rounded-full mr-3"></span>
+                      Warnings ({validationResult.warnings.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {validationResult.warnings.map((warning: any, index: number) => (
+                        <div key={index} className="text-yellow-300 text-sm bg-yellow-500/20 p-4 rounded-xl border border-yellow-400/30 backdrop-blur-sm">
+                          {warning.message || warning}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Info */}
+                {validationResult.info && Object.keys(validationResult.info).length > 0 && (
+                  <div>
+                    <h4 className="font-semibold text-blue-300 mb-3 flex items-center">
+                      <span className="w-2 h-2 bg-blue-500 rounded-full mr-3"></span>
+                      Workflow Info
+                    </h4>
+                    <div className="bg-blue-500/20 p-4 rounded-xl border border-blue-400/30 backdrop-blur-sm">
+                      <pre className="text-blue-300 text-xs overflow-auto whitespace-pre-wrap">
+                        {JSON.stringify(validationResult.info, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

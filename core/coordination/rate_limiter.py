@@ -1,4 +1,4 @@
-"""Rate limiting implementations from paste-2.txt."""
+"""Rate limiting implementations."""
 
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Any

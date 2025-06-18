@@ -10,9 +10,10 @@ import uuid
 from .state import StateStatus, AgentStatus, StateMetadata, PrioritizedState, Priority
 from .context import Context
 from .dependencies import DependencyConfig, DependencyLifecycle
-from ..resources.requirements import ResourceRequirements
+from core.resources.requirements import ResourceRequirements
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class RetryPolicy:
@@ -31,60 +32,68 @@ class RetryPolicy:
             delay *= (0.5 + random.random() * 0.5)
         await asyncio.sleep(delay)
 
+
 class Agent:
     def __init__(
-        self,
-        name: str,
-        max_concurrent: int = 5,
-        retry_policy: Optional[RetryPolicy] = None,
-        state_timeout: Optional[float] = None,
-        resource_pool=None
+            self,
+            name: str,
+            max_concurrent: int = 5,
+            retry_policy: Optional[RetryPolicy] = None,
+            state_timeout: Optional[float] = None,
+            resource_pool=None
     ):
         self.name = name
         self.max_concurrent = max_concurrent
         self.retry_policy = retry_policy or RetryPolicy()
         self.state_timeout = state_timeout
         self.resource_pool = resource_pool
-        
+
         # Core state management
         self.states: Dict[str, Callable] = {}
         self.state_metadata: Dict[str, StateMetadata] = {}
         self.dependencies: Dict[str, List[str]] = {}
         self.priority_queue: List[PrioritizedState] = []
         self.shared_state: Dict[str, Any] = {}
-        
+
         # Execution tracking
         self._running_states: Set[str] = set()
         self.completed_states: Set[str] = set()
         self.completed_once: Set[str] = set()
         self.status = AgentStatus.IDLE
         self.session_start: Optional[float] = None
-        
+
         # Context for state execution
         self.context = Context(self.shared_state)
 
     def add_state(
-        self,
-        name: str,
-        func: Callable,
-        dependencies: Optional[List[str]] = None,
-        resources: Optional[ResourceRequirements] = None,
-        max_retries: Optional[int] = None,
-        retry_policy: Optional[RetryPolicy] = None,
-        priority: Priority = Priority.NORMAL
+            self,
+            name: str,
+            func: Callable,
+            dependencies: Optional[List[str]] = None,
+            resources: Optional[ResourceRequirements] = None,
+            max_retries: Optional[int] = None,
+            retry_policy: Optional[RetryPolicy] = None,
+            priority: Priority = Priority.NORMAL
     ) -> None:
         """Add a state to the agent"""
         self.states[name] = func
-        
+
+        # Create resources if not provided
+        if resources is None:
+            resources = ResourceRequirements()
+
+        # Set priority on resources
+        resources.priority = priority
+
         metadata = StateMetadata(
             status=StateStatus.PENDING,
             max_retries=max_retries or self.retry_policy.max_retries,
-            resources=resources or ResourceRequirements(),
+            resources=resources,
             retry_policy=retry_policy or self.retry_policy,
             priority=priority
         )
         self.state_metadata[name] = metadata
-        
+
         # Set up dependencies
         self.dependencies[name] = dependencies or []
 
@@ -118,29 +127,29 @@ class Agent:
         if not self.states:
             logger.info("No states defined, nothing to run")
             return
-        
+
         self.status = AgentStatus.RUNNING
         self.session_start = time.time()
-        
+
         # Find entry point states (states without dependencies)
         entry_states = self._find_entry_states()
         if not entry_states:
             logger.warning("No entry point states found, using first state")
             entry_states = [next(iter(self.states.keys()))]
-        
+
         logger.info(f"Starting workflow with entry states: {entry_states}")
-        
+
         # Add entry states to queue
         for state_name in entry_states:
             await self._add_to_queue(state_name)
-        
+
         try:
             # Main execution loop
             start_time = time.time()
-            while (self.priority_queue and 
+            while (self.priority_queue and
                    self.status == AgentStatus.RUNNING and
                    (not timeout or time.time() - start_time < timeout)):
-                
+
                 ready_states = await self._get_ready_states()
                 if not ready_states:
                     # No ready states, check if we're waiting for running states
@@ -150,23 +159,23 @@ class Agent:
                     else:
                         # No running states and no ready states - we're done
                         break
-                
+
                 # Process ready states (up to max_concurrent)
                 tasks = []
                 for state_name in ready_states[:self.max_concurrent]:
                     task = asyncio.create_task(self.run_state(state_name))
                     tasks.append(task)
-                
+
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
-                
+
                 # Small delay to prevent busy waiting
                 await asyncio.sleep(0.01)
-            
+
             # Mark as completed if we finished normally
             if self.status == AgentStatus.RUNNING:
                 self.status = AgentStatus.COMPLETED
-                
+
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
             self.status = AgentStatus.FAILED
@@ -186,10 +195,10 @@ class Agent:
         if state_name not in self.state_metadata:
             logger.error(f"State {state_name} not found in metadata")
             return
-        
+
         metadata = self.state_metadata[state_name]
         priority_value = metadata.priority.value + priority_boost
-        
+
         heapq.heappush(
             self.priority_queue,
             PrioritizedState(
@@ -204,57 +213,57 @@ class Agent:
         """Get states that are ready to run"""
         ready_states = []
         temp_queue = []
-        
+
         while self.priority_queue:
             state = heapq.heappop(self.priority_queue)
-            
+
             if await self._can_run(state.state_name):
                 ready_states.append(state.state_name)
             else:
                 temp_queue.append(state)
-        
+
         # Put non-ready states back in queue
         for state in temp_queue:
             heapq.heappush(self.priority_queue, state)
-        
+
         return ready_states
 
     async def run_state(self, state_name: str) -> None:
         """Execute a single state"""
         if state_name in self._running_states:
             return
-        
+
         self._running_states.add(state_name)
         metadata = self.state_metadata[state_name]
         metadata.status = StateStatus.RUNNING
-        
+
         logger.info(f"Starting state: {state_name}")
-        
+
         try:
             # Resolve dependencies
             await self._resolve_dependencies(state_name)
-            
+
             # Execute the state function
             context = Context(self.shared_state)
             start_time = time.time()
-            
+
             result = await self.states[state_name](context)
-            
+
             duration = time.time() - start_time
             logger.info(f"State {state_name} completed in {duration:.2f}s")
-            
+
             # Update metadata
             metadata.status = StateStatus.COMPLETED
             metadata.last_execution = time.time()
             metadata.last_success = time.time()
-            
+
             # Track completion
             self.completed_states.add(state_name)
             self.completed_once.add(state_name)
-            
+
             # Handle transitions/next states
             await self._handle_state_result(state_name, result)
-            
+
         except Exception as error:
             logger.error(f"State {state_name} failed: {error}")
             await self._handle_failure(state_name, error)
@@ -265,7 +274,7 @@ class Agent:
         """Handle the result of state execution"""
         if result is None:
             return
-        
+
         if isinstance(result, str):
             # Result is a next state name
             if result in self.states:
@@ -280,7 +289,7 @@ class Agent:
         """Handle state execution failure"""
         metadata = self.state_metadata[state_name]
         metadata.attempts += 1
-        
+
         if metadata.attempts < metadata.max_retries:
             logger.info(f"Retrying state {state_name} (attempt {metadata.attempts + 1})")
             metadata.status = StateStatus.PENDING
@@ -289,7 +298,7 @@ class Agent:
         else:
             logger.error(f"State {state_name} failed after {metadata.attempts} attempts")
             metadata.status = StateStatus.FAILED
-            
+
             # Try compensation if available
             compensation_state = f"{state_name}_compensation"
             if compensation_state in self.states:
@@ -307,17 +316,17 @@ class Agent:
         """Check if state can run (dependencies satisfied)"""
         if state_name in self._running_states:
             return False
-        
+
         if state_name in self.completed_once:
             # Check if this is a repeatable state
             return False
-        
+
         # Check dependencies
         deps = self.dependencies.get(state_name, [])
         for dep_name in deps:
             if dep_name not in self.completed_states:
                 return False
-        
+
         return True
 
     def cancel_state(self, state_name: str) -> None:
@@ -331,4 +340,4 @@ class Agent:
         self.status = AgentStatus.CANCELLED
         for state_name in self._running_states.copy():
             self.cancel_state(state_name)
-        self.priority_queue.clear() 
+        self.priority_queue.clear()
