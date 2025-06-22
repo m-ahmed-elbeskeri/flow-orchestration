@@ -29,6 +29,7 @@ class AgentStatus(str, Enum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class StateStatus(str, Enum):

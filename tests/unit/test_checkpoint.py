@@ -284,7 +284,7 @@ class TestCreateFromAgent:
         mock_agent.completed_states = set()
         mock_agent.completed_once = set()
         mock_agent.shared_state = {"test": "value"}
-        mock_agent._session_start = 12345.67
+        mock_agent.session_start = 12345.67  # Changed from _session_start to session_start
 
         with patch('time.time', return_value=99999.99):
             checkpoint = AgentCheckpoint.create_from_agent(mock_agent)

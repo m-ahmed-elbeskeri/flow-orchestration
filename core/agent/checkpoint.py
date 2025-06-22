@@ -28,6 +28,9 @@ class AgentCheckpoint:
         """Create checkpoint from agent instance."""
         from copy import deepcopy
         
+        # Handle missing session_start gracefully
+        session_start = getattr(agent, 'session_start', None)
+
         return cls(
             timestamp=time.time(),
             agent_name=agent.name,
@@ -38,5 +41,5 @@ class AgentCheckpoint:
             completed_states=set(agent.completed_states),
             completed_once=set(agent.completed_once),
             shared_state=deepcopy(agent.shared_state),
-            session_start=agent._session_start
+            session_start=session_start
         )
